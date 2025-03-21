@@ -22,7 +22,10 @@ diffterm <- diff_terms(comb_pheno)
 
 ## Filter out counts with edgeR's cpm method
 filter_ids <-
-  cpm_filter_grouped(comb_batch, setNames(comb_pheno$samplename, comb_pheno$group))
+  cpm_filter_grouped(
+    comb_batch,
+    setNames(comb_pheno$samplename, comb_pheno$group)
+  )
 
 named_groups <-
   setNames(
@@ -145,72 +148,6 @@ voom_res_group <- lapply(
     return(c(voom_top, voom_top_genes))
   }
 )
-
-
-#### Formatting some data for the raport
-## transform some matrices to HUGO
-expr_mat_test <-
-  raw_mat_test %>%
-  rename(ensembl_gene_id = gene_id) %>%
-  geneid_converter(annot) %>%
-  # set NA's as 0's by default and enforce integers (for compact data format)
-  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
-  filter(!is.na(external_gene_name)) %>%
-  rename(gene_id = external_gene_name) %>%
-  transform_count_mat(pheno_test)
-
-expr_tpm_test <-
-  raw_tpm_test %>%
-  rename(ensembl_gene_id = gene_id) %>%
-  geneid_converter(annot) %>%
-  # set NA's as 0's by default and enforce integers (for compact data format)
-  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
-  filter(!is.na(external_gene_name)) %>%
-  rename(gene_id = external_gene_name) %>%
-  transform_count_mat(pheno_test)
-
-
-## re/precalculate some large nasty bits
-global_expr_pca <-
-  comb_batch_tpm %>%
-  transform_count_mat(comb_pheno) %>%
-  bind_rows(expr_tpm_test[colnames(expr_tpm_test) %in% colnames(.)]) %>%
-  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
-  recipe() %>%
-  update_role(samplename, new_role = "id") %>%
-  update_role(c("group", "cyclephase"), new_role = "other") %>%
-  ## eliminate some genes with zero expression
-  step_zv(all_numeric()) %>%
-  step_normalize(all_numeric()) %>%
-  step_pca(all_numeric(), num_comp = 3) %>%
-  prep(strings_as_factors = F) %>%
-  bake(new_data =
-    comb_batch_tpm %>% 
-    transform_count_mat(comb_pheno) %>%
-    bind_rows(expr_tpm_test[colnames(expr_tpm_test) %in% colnames(.)]) %>%
-    mutate(across(where(is.numeric), ~ replace_na(.x, 0)))
-  )
-
-global_expr_umap <-
-  comb_batch_tpm %>%
-  transform_count_mat(comb_pheno) %>%
-  bind_rows(expr_tpm_test[colnames(expr_tpm_test) %in% colnames(.)]) %>%
-  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
-  recipe() %>%
-  update_role(samplename, new_role = "id") %>%
-  update_role(c("group", "cyclephase"), new_role = "other") %>%
-  ## eliminate some genes with zero expression
-  step_zv(all_numeric()) %>%
-  step_normalize(all_numeric()) %>%
-  step_umap(all_numeric(), num_comp = 2) %>%
-  prep(strings_as_factors = F) %>%
-  bake(new_data =
-    comb_batch_tpm %>%
-    transform_count_mat(comb_pheno) %>%
-    bind_rows(expr_tpm_test[colnames(expr_tpm_test) %in% colnames(.)]) %>%
-    mutate(across(where(is.numeric), ~ replace_na(.x, 0)))
-  )
-
 
 
 uf_out_join <-
