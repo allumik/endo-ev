@@ -1,0 +1,674 @@
+---
+title: "Single cell deconvolution into Extracellular Vesicules"
+format:
+  html:
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+    self-contained-math: true
+jupyter: python3
+---
+
+
+# Prelude: Setup environment
+
+This document contains the condensed form of analysis and some more technical parts of the final article.
+
+## Load data and environment
+
+Setup the environment and import dependencies.
+
+1. Load the dependencies, set up multithreading.
+2. Set color groups and values.
+
+```{python}
+#| output: false
+
+import re
+import pandas as pd
+import scanpy as sc
+import anndata as an
+import numpy as np
+import altair as alt
+from IPython.display import HTML
+from pathlib import Path
+from dotenv import load_dotenv
+from os import getenv
+from sklearn.decomposition import PCA
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from sklearn.preprocessing import normalize
+
+## import the functions used in this report (got too long to include them in the report)
+try: from analysis.helpers.deconvo_functions import *
+except ImportError: from helpers.deconvo_functions import *
+
+## load the environment variables from the .env file
+load_dotenv()
+if getenv("DATA_FOLDER") is None:
+  load_dotenv(Path.cwd() / ".env")
+
+proj_folder = getenv("PROJ_FOLDER")
+anndata_folder = getenv("ANNDATA_FOLDER")
+atlas_folder = getenv("ATLAS_FOLDER")
+data_folder = getenv("DATA_FOLDER")
+raw_data_folder = getenv("RAW_DATA_FOLDER")
+
+# some other dataset locations
+snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
+ccht_data_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw.feather"
+ccht_pheno_loc = Path(data_folder).expanduser() / "filtered" / "phenotype.tsv"
+fractions_folder = Path(data_folder) / "tape_fractions"
+fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
+
+```
+
+Load in the datasets:
+
+* the reference single cell dataset from the HECAv2 (`sc_dat`).
+* bulk transcriptomes from UF derived EV's of endometrium and biopsies (`ccht_uf_raw`).
+* phenotype table for the EV and biopsy samples (`ccht_uf_pheno`).
+
+The HECA dataset is renormalised with the `omicsverse` v1.6.7 package's `preprocess` function with the following command `ov.pp.preprocess(sc_dat, mode="pearson|pearson", n_HVGs=3000)`. This normalises the dataset with the Pearson method (??? et al (check the documentation)).
+
+```{python}
+#| output: false
+
+## load in the modified HECA atlas
+sc_dat = an.read_h5ad(snapshot_an_loc)
+
+## load in the EV CCHT only data
+terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"] # some samples to exclude
+ccht_uf_raw = pd.read_feather(ccht_data_loc).set_index("gene_id").iloc[:-1]
+ccht_uf_pheno = pd.read_table(ccht_pheno_loc).set_index("samplename").assign(
+    cyclephase=lambda x: 
+      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
+    )
+ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator and samplename in @ccht_uf_raw.columns")
+ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
+
+## load in the fractions predicted by the latest trained model
+frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
+
+general_cells = ( # associate celltypes with the lineage information in the sc_dat.obs
+  sc_dat.obs
+  .loc[:, ["lineage", "celltype"]]
+  .drop_duplicates("celltype")
+  .set_index("celltype", drop=True)
+  .reindex(frac_pred.columns.values)
+)
+
+# Color scale for the celltypes - TODO: extende the color range to not repeat
+global_color_scale = alt.Scale(domain=general_cells.index.unique().tolist())
+
+```
+
+We also load in the different statistical testing tables for CCHT dataset.
+
+```{python}
+
+ccht_bio_stat = pd.read_excel(fractions_folder / "ccht_bio.xlsx", index_col=0)
+ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
+
+```
+
+# Methods
+
+## Pre-processing pipeline
+
+Raw sequencing reads were preprocessed with the "rnaseq" pipeline (v3.12.0) from nf-core [[Ewels et al](10.5281/zenodo.1400710)]. The pipeline was configured to map reads to the GRCh37 genome using the STAR tool and after mapping, quantified with RSEM algorithm [[RSEM](10.1186/1471-2105-12-323) [STAR](10.1093/bioinformatics/bts635)].
+
+```{bash filename="Command for running nf-core/rnaseq"}
+
+## nf-core/rnaseq v3.12 (https://nf-co.re/rnseq/3.12.0)
+nextflow run nf-core/rnaseq \
+  -r 3.12.0 \
+  --input samplesheet_mrna.csv \
+  --genome GRCh37 \
+  --aligner star_rsem \
+  --outdir "./results_mrna/" \
+  -c nextflow.config \
+  -profile singularity
+
+```
+
+## DE analysis
+
+Downstream analysis was done in R and Python programming languages. For differential analysis, we used both DESeq2 and limma-voom algorithms to measure the differences between gene expression levels in different sample groups and to perform statistical testing on the gene-wise differences [[DESeq2](), [limma-voom]()]. While DESeq2 DE results were used for downstream analysis, we used the limma-voom toolset as an alternative approach as it has been shown to have more stringent multiple hypothesis testing in regards to type I error [source: find that benchmarking paper].
+
+[TODO: check up the biomarker reports `ev_biomarker.rmd`]
+
+## QC and sample selection
+
+[TODO: check `ev_biomarker.rmd` and `ev_deconvolution.qmd`]
+
+## TAPE model parameters
+
+This study is based on cell type deconvolution of bulk RNA-seq samples using scRNA-seq reference. For deconvolution analysis we used the [TAPE](https://www.nature.com/articles/s41467-022-34550-9) algorithm and trained the model using the [HECA](https://doi.org/10.1101/2023.11.03.564728) endometrial cell atlas.
+
+```{python}
+#| output: echo
+
+model_params = {
+  "celltype_key": "celltype",
+  "top_marker_num": 250, # reduce it from the default parameter of 500
+  # get eight of all the single ~ladies~ cells
+  "max_single_cells": round(len(sc_dat.obs.index) / 8),
+  "ratio_num": 1,
+  "gpu": 0
+}
+
+frac_params = {
+  "batch_size": 512,
+  "epochs": 1000, # looking at loss plot then 500 seems to be already enough, but 1000 seems to have more accurate representatoin of the cell types.
+  "method": "tape", # define this, otherwise defaults for scaden
+  "scaler": "ss", # harmonises distributions better
+  "mode": "high-resolution" # for using VAE's for cell type inference
+}
+
+```
+
+
+# Results with Figures
+
+## FIG 1: Study Design
+
+::: {.panel-tabset}
+
+### Select a tab: {.unnumbered .unlisted}
+
+### Analysis Steps {.unnumbered .unlisted}
+
+```{python}
+# placeholder image
+study_schema = spacer_with_text(height=400, width=580)
+```
+
+### Overview of the Samples {.unnumbered .unlisted}
+
+```{python}
+# barplot of the number of samples throughout the cycle phase
+barplot_ev_sum = alt.Chart(ccht_uf_pheno).mark_bar().encode(
+  x=alt.X("cyclephase:N"),
+  y=alt.Y("count(group):Q").title("Nr. of Samples"),
+  color=alt.Color("group:N")
+).properties(width=120, height=250)
+
+
+# include single cell data overview as extra column
+barplot_sc_sum = alt.Chart(
+  sc_dat.obs[["cyclephase", "samplename", "dataset"]].drop_duplicates()
+).mark_bar().encode(
+  x=alt.X("cyclephase:N"),
+  y=alt.Y("count(dataset):Q").title("Nr. of Donors"),
+  color=alt.Color("dataset:N")
+).properties(width=120, height=250)
+
+(barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent")
+
+```
+
+### UMAP of the samples? {.unnumbered .unlisted}
+
+### Feature Counts? {.unnumbered .unlisted}
+
+:::
+
+```{python}
+
+(study_schema | (barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent"))
+
+```
+
+## FIG 2: Cell Type Deconvolution Profiles throughout the Menstrual Cycle
+
+::: {.panel-tabset}
+
+### Select a tab: {.unnumbered .unlisted}
+
+### Proportions Plot of both Biopsy and EV {.unnumbered .unlisted}
+
+```{python}
+
+fractions_long = peruvian_transform(
+  fractions=frac_pred,
+  phenotype=ccht_uf_pheno,
+  general_cells=general_cells,
+  grouping_ids=["cyclephase", "group"]
+)
+
+peruvian_bio_ev = peruvian_grouped(
+  fractions_df=fractions_long,
+  grouping_id="group",
+  global_color_scale=global_color_scale,
+  dims=(200, 150)
+)
+
+peruvian_bio_ev.show()
+
+```
+
+### Biplot of the Fractions {.unnumbered .unlisted}
+
+```{python}
+
+biplot, pca = biplot_fractions(
+  frac_pred,
+  ccht_uf_pheno,
+  color_field="cyclephase", 
+  style_field="group",
+  text_limit = 0.04, # controls on how much labels are shown
+  dims = (400, 400)
+  )
+biplot.show()
+
+```
+
+In addition, make a histogram of the main loadings to make the contributions more clearer. `TODO: make it into percentages?`
+
+```{python}
+
+def format_loadings(pca_obj, celltypes):
+  """
+  Get the euclidean distance of explained variance per component of `pca_obj`.
+  Generate a dataframe with the "Variance Explained" and the "Feature" column from `celltypes` list.
+  """
+  loadings = np.linalg.norm(pca_obj.components_.T * np.sqrt(pca_obj.explained_variance_), axis=1)
+  return pd.DataFrame({
+    "Variance Explained": loadings, "Feature": celltypes
+  }).sort_values("Variance Explained", ascending=False).reset_index(drop=True)
+
+pca_all = pca # save it with another name for clarity
+loadings_all = format_loadings(pca_all, frac_pred.columns).rename(columns={"Variance Explained": "Combined"}).set_index("Feature")
+
+pheno_tmp = ccht_uf_pheno.query("group == 'UF'")
+_, pca_uf = biplot_fractions(frac_pred.loc[pheno_tmp.index], pheno_tmp, color_field="cyclephase")
+loadings_uf = format_loadings(pca_uf, frac_pred.columns).rename(columns={"Variance Explained": "UF"}).set_index("Feature")
+
+pheno_tmp = ccht_uf_pheno.query("group == 'biopsy'")
+_, pca_bio = biplot_fractions(frac_pred.loc[pheno_tmp.index], pheno_tmp)
+loadings_bio = format_loadings(pca_bio, frac_pred.columns).rename(columns={"Variance Explained": "Biopsy"}).set_index("Feature")
+
+
+## The plot part - visualise all the different loadings
+loadings_combined = (
+  pd.concat([loadings_all, loadings_uf, loadings_bio], axis=1)
+  .stack()
+  .reset_index()
+  .rename(columns={"level_1": "Group", 0: "Variance Explained"})
+  )
+
+loadings_plt = alt.Chart(loadings_combined).mark_line(
+    point=alt.OverlayMarkDef(filled=False, fill="white", size=10)
+  ).encode(
+  x=alt.X("Feature:N", sort=None).axis(labelAngle=-60),
+  y=alt.Y("Variance Explained:Q"),
+  color=alt.Color("Group:N")
+).properties(
+  title='Loadings for Principal Component',
+  width=400,
+  height=150
+)
+
+loadings_plt.show()
+
+```
+
+### Testing the Differences of the Deconvolution Proportions through Cycle Phases {.unnumbered .unlisted}
+
+Here we create a visual representation of the statistical testing and correlation analysis results of the UF and Biopsy samples. We present the most statistically significant changes throughout the cycle phases.
+
+```{python}
+## data manipulation for the plot
+def swap_groups(df, to_swap):
+  for g1, g2 in to_swap:
+    # find that combination of pairs in the dataframe
+    stats_view = (df.group1==g1) & (df.group2==g2)
+    # swap the column names for those pairs of groups
+    swapped_view = df.loc[stats_view].rename(columns={"group1": "group2", "group2": "group1"})
+    # also invert the diff bc the groups have swapped
+    swapped_view["meandiff"] *= -1
+    # and now replace that part of the dataframe
+    df.loc[stats_view] = swapped_view
+  return df
+
+swapper = [("post", "rec"), ("rec", "pre"), ("pre", "pro")]
+excluder = ["post_vs_pre", "pro_vs_rec", "post_vs_pro"]
+comp_order = ["pro_vs_pre", "pre_vs_rec", "rec_vs_post"]
+cycle_order = ["pro", "pre", "rec", "post"]
+plt_width, plt_height = (1000, 150)
+
+stat_comb_prim = (
+  pd.concat([ccht_bio_stat.assign(method="bio"), ccht_uf_stat.assign(method="uf")])
+  .query("`anova p-val` <= 0.05")
+  .pipe(swap_groups, swapper)
+  .assign(
+    p_stars=lambda x:
+      np.select([ x["p-adj"] <= 0.001, x["p-adj"] <= 0.01, x["p-adj"] <= 0.05, True], ["***", "**", "*", ""]),
+    comparison=lambda x: x.group1 + "_vs_" + x.group2,
+    meandiff_format=lambda x: "Δ " + round(x.meandiff * 100, 2).astype(str) + "%",
+    padj_format=lambda x: np.where(x["p-adj"] < 0.01, "FDR <0.01", "FDR " + round(x["p-adj"], 2).astype(str))
+  )
+  # the great filter
+  .query("comparison not in @excluder")
+  .dropna(subset=["comparison"])
+  .join(general_cells, on="celltype")
+  .sort_values(["lineage", "celltype"])
+  .reset_index(drop=True)
+)
+```
+
+For the Biopsy samples comparison:
+
+```{python}
+stat_comb = stat_comb_prim.query("method == 'bio'")
+
+# create a dummy dataframes for the custom scale hack
+stat_tmp_groups = pd.DataFrame({
+  "base": cycle_order,
+  "celltype": stat_comb.celltype.drop_duplicates().values[0], 
+  "loc": np.linspace(0,1,len(cycle_order))
+  })
+
+# set up basechart for the X axis, sadly we'll have to redefine the Y axis for 
+# both the text and heatmap due to differences in handling of ticks
+base_chart = alt.Chart(stat_comb).encode(
+  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values).axis(labelAngle=-45, orient="top", title="Biopsy"),
+  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, tickBand="extent", title=None)
+)
+
+heatmap = base_chart.mark_rect().encode(
+  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]).legend(None)
+  )
+
+# the significance testing texty part
+base_text = base_chart.encode(
+  # have to override yaxis ticks here, otherwise it'll add it to the right side later
+  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, ticks=False, title=None) 
+)
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, dy=-6).encode(
+  text=alt.Text("p_stars"))
+text_overlay_diff = base_text.mark_text(fontSize=10, dy=14).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
+text_overlay_pval = base_text.mark_text(fontSize=10, dy=2).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
+
+# create a pseudoaxis plot where we create custom labels for the marks
+yaxis_group = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="right").encode(
+  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values),
+  y=alt.Y("loc:Q").axis(None),
+  xOffset=alt.value(-15),
+  text=alt.Text("base")
+)
+
+# create another pseudoaxis plot to show the lineages of celltypes as a colored line above heatmap values
+xaxis_group_colors = alt.Chart(stat_comb).mark_rect().encode(
+  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values).axis(orient="top"),
+  yOffset=alt.value(plt_height + 10), # set it to +10 of the plot height so that it would overlap
+  color=alt.Color("lineage:N").legend(None)
+)
+
+comp_stats_bio_plt = (
+  xaxis_group_colors + heatmap + text_overlay_stars + text_overlay_diff + text_overlay_pval + yaxis_group
+).properties(width=plt_width, height=plt_height)
+
+comp_stats_bio_plt.show()
+
+```
+
+For the UF samples comparison:
+
+```{python}
+stat_comb = stat_comb_prim.query("method == 'uf'")
+
+# create a dummy dataframes for the custom scale hack
+stat_tmp_groups = pd.DataFrame({
+  "base": cycle_order,
+  "celltype": stat_comb.celltype.drop_duplicates().values[0], 
+  "loc": np.linspace(0,1,len(cycle_order))
+  })
+
+# set up basechart for the X axis, sadly we'll have to redefine the Y axis for 
+# both the text and heatmap due to differences in handling of ticks
+base_chart = alt.Chart(stat_comb).encode(
+  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values).axis(labelAngle=-45, title="UF"),
+  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, tickBand="extent", title=None)
+)
+
+heatmap = base_chart.mark_rect().encode(
+  color=alt.Color("meandiff:Q")
+    .scale(scheme="blueorange", domain=[-.2,.2])
+  )
+
+# the significance testing texty part
+base_text = base_chart.encode(
+  # have to override yaxis ticks here, otherwise it'll add it to the right side later
+  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, ticks=False, title=None) 
+)
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, dy=-6).encode(
+  text=alt.Text("p_stars"))
+text_overlay_diff = base_text.mark_text(fontSize=10, dy=14).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
+text_overlay_pval = base_text.mark_text(fontSize=10, dy=2).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
+
+# create a pseudoaxis plot where we create custom labels for the marks
+yaxis_group = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="right").encode(
+  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values),
+  y=alt.Y("loc:Q").axis(None),
+  xOffset=alt.value(-15),
+  text=alt.Text("base")
+)
+
+# create another pseudoaxis plot to show the lineages of celltypes as a colored line above heatmap values
+xaxis_group_colors = alt.Chart(stat_comb).mark_rect().encode(
+  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values),
+  yOffset=alt.value(-10), # offset to overlay on the top
+  y2=alt.value(0), # set to 0 to not draw it behind the main heatmap (shows small lines)
+  color=alt.Color("lineage:N")
+)
+
+comp_stats_uf_plt = (
+  xaxis_group_colors + heatmap + text_overlay_stars + text_overlay_diff + text_overlay_pval + yaxis_group
+).properties(width=plt_width, height=plt_height)
+
+comp_stats_uf_plt.show()
+
+```
+
+And combined on top of each other
+
+```{python}
+# remove the legend from one of those plots, id does not sync it for some reason
+# TODO: the lineage colors are still not synchronised
+comp_stats_plt = (comp_stats_bio_plt & comp_stats_uf_plt).resolve_scale(x="independent")
+comp_stats_plt.show()
+```
+
+:::
+
+Combining them all into one.
+
+```{python}
+# have to resolve the color scale, otherwise the loadings_plt will override the biplot's scale
+((peruvian_bio_ev | (biplot & loadings_plt)) & comp_stats_plt).resolve_scale(color="independent").show()
+# below both of them there should be the directionality plot of DE proportions
+```
+
+## FIG 3: Comparison of Biopsy and EV Sampling Methods
+
+Here we focus on the comparison of the paired sample profiles from **both** biopsy and UF origin.
+
+::: {.panel-tabset}
+
+### Select a tab: {.unnumbered .unlisted}
+
+### Convoluted Deconvolution Plot {.unnumbered .unlisted}
+
+```{python}
+# the dendrogram part
+linkage_mat = linkage(frac_pred, method="complete", optimal_ordering=True)
+dend_obj = dendrogram( linkage_mat, labels=ccht_uf_pheno.index, no_plot=True)
+dendro_marks = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
+dendro_coord = get_df_coord(dend_obj)
+
+# and transform the x and y coords to a suitable scale
+scaler = .25
+cols_xk = ["xk1", "xk2", "xk3", "xk4"]
+cols_yk = ["yk1", "yk2", "yk3", "yk4"]
+x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
+dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
+dendro_coord[cols_xk] *= (dendro_marks.shape[0] - 1)
+dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
+dendro_coord[cols_yk] += 1.18 # and shift up whole unit
+
+base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
+# the U shape is composed of a shoulder plus two arms, made with separate lines...
+shoulder = base.mark_rule().encode(
+    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
+    x2=alt.X2("xk3:Q"),
+    y=alt.Y("yk2:Q", title="").axis(None))
+arm1 = base.mark_rule().encode(
+    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
+    y=alt.Y("yk1:Q").axis(None),
+    y2=alt.Y2("yk2:Q"))
+arm2 = base.mark_rule().encode(
+    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
+    y=alt.Y("yk3:Q").axis(None),
+    y2=alt.Y2("yk4:Q"))
+
+# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
+chart_den = shoulder + arm1 + arm2
+```
+
+```{python}
+# the barplot part
+# make fracs long again - reuse previous peruvian_transform
+fractions_long = (
+  peruvian_transform(
+    fractions=frac_pred,
+    phenotype=ccht_uf_pheno,
+    general_cells=general_cells
+  )
+  .rename(columns={"level_0": "samplename"})
+  .set_index("samplename")
+  .join(dendro_marks.set_index("labels"))
+  .join(ccht_uf_pheno)
+  .reset_index()
+  .sort_values("i")
+)
+
+custom_labels = fractions_long.samplename.drop_duplicates().values.tolist()
+# custom printer - by default the list is printed with newlines so that the js parses the list transposed
+custom_labels_str =  ', '.join(f"'{label}'" for label in custom_labels)
+
+base_bar = alt.Chart(fractions_long, view=alt.ViewConfig(strokeWidth=0))
+barplot = base_bar.mark_bar(
+  width=8
+).encode(
+  x=alt.X("i:Q").axis(
+      title=None, grid=False, domain=False,
+      tickCount=len(custom_labels),
+      labelAngle=90,
+      labelOverlap=False, 
+      labelExpr=f"[{custom_labels_str}][datum.value]" # custom label values mapped
+    ).scale(domain=[0,len(custom_labels)-1], padding=10),
+  y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0,1]),
+  color=alt.Color("celltype:N").scale(scheme="tableau20").legend(columns=2)
+  )
+
+# add the color groupings 
+x_cycle_colors = barplot.mark_rect(clip=False, width=14).encode(
+    y=alt.value(0), # for some reason this works
+    y2=alt.value(-4),
+    yOffset=alt.value(-12),
+    color=alt.Color("cyclephase:N")
+  )
+x_method_colors = barplot.mark_rect(clip=False, width=14).encode(
+    y=alt.value(0), # for some reason this works
+    y2=alt.value(-16),
+    yOffset=alt.value(-24),
+    color=alt.Color("group:N")
+  )
+
+```
+
+```{python}
+dendro_barplot = (chart_den + barplot + x_cycle_colors + x_method_colors).resolve_scale(x="shared", y="shared", color="independent").resolve_axis(y="independent").properties(width=500, height=150)
+dendro_barplot.show()
+```
+
+### Correlation Heatmap of the Paired Samples {.unnumbered .unlisted}
+
+```{python}
+# calculate the correlation matrix and prepare data for the plot
+# first we create a phenotype file to order the samples after
+prepped_pheno = (
+  ccht_uf_pheno
+  .loc[frac_pred.index]
+  .assign(HUT=lambda x: x.index.str.extract(r"(HUT\d+)", expand=False))
+  .sort_values(["cyclephase", "HUT"])
+)
+
+# select only samples with corresponding HUT pair
+paired_samples_stem = prepped_pheno.HUT.value_counts().to_frame().query("count > 1").index
+prepped_pheno = prepped_pheno.query("HUT in @paired_samples_stem")
+
+# run a corr matrix with itself
+corr_mat = (
+  # transpose to run correlation against the samples
+  frac_pred.loc[prepped_pheno.index].T.corr(method="spearman")
+  # select out only cols with UF in columns and biopsy in rows
+  .filter(regex="UF", axis=0).filter(regex="biopsy", axis=1)
+  # stack it into long version for Altair
+  .stack().rename("correlation").to_frame().reset_index(names=["y_vars", "x_vars"])
+  # now add a cols with the locations of last groups
+  .join(prepped_pheno[["cyclephase"]], on="x_vars")
+  .join(prepped_pheno[["cyclephase"]], on="y_vars", lsuffix="_y")
+)
+
+```
+
+```{python}
+# Create Altair plot
+base_heatmap = alt.Chart(corr_mat).mark_rect().encode(
+    x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
+    y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
+    color=alt.Color('correlation:Q', scale=alt.Scale(scheme='magma')) # Quantitative for correlation values, using magma colormap
+  ).properties(
+    title='Correlation of Deconvolution Fractions'
+  )
+
+# add the color groupings 
+x_group_colors = base_heatmap.mark_rect().encode(
+  x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None), # Nominal for categorical x-axis
+  color=alt.Color("cyclephase:N"),
+  xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
+)
+
+y_group_colors = base_heatmap.mark_rect().encode(
+  y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None), # Nominal for categorical x-axis
+  color=alt.Color("cyclephase_y:N").legend(None),
+  yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
+)
+
+# Layer heatmap and colors
+final_chart = (x_group_colors + y_group_colors + base_heatmap).resolve_scale(
+  x='shared', y='shared', color='shared'
+)
+
+# Display the chart
+final_chart
+```
+
+### Venn diagram of the DE genes {.unnumbered .unlisted}
+
+```{python}
+
+```
+
+:::
+
+```{python}
+(dendro_barplot & final_chart).resolve_scale(color="independent").show()
+```
+
