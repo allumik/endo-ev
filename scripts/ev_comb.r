@@ -46,7 +46,8 @@ ev_comb_pheno <-
 # join the dataset itself
 comb_mat <-
   list("HUT" = hut_mat, "Vigano" = ev_comb) %>%
-  reduce(inner_join, by = "external_gene_name")
+  reduce(inner_join, by = "external_gene_name") %>%
+  select(!ends_with("biopsy") & !ends_with("biopsy_1"))
 
 # harmonise the pheno file and add batch parameter
 # grouping says the sample type (EV/Biopsy)
@@ -57,8 +58,9 @@ comb_pheno <-
     "Vigano" = ev_comb_pheno %>% rename(group = grouping)
   ) %>%
   bind_rows(.id = "dataset") %>%
-  select(c("samplename", "group", "cyclephase", "dataset")) %>%
+  select(c("samplename", "cyclephase", "dataset", "group")) %>%
   # align the sample order with the matrix
+  filter(samplename %in% colnames(comb_mat)) %>%
   arrange(match(samplename, colnames(comb_mat)[-1]))
 
 # apply batch normalisation on the dataframes
@@ -68,11 +70,12 @@ comb_batch <-
   as.matrix %>%
   sva::ComBat_seq(
     batch = comb_pheno$dataset,
-    group = paste(comb_pheno$group, comb_pheno$cyclephase)
+    group = comb_pheno$cyclephase
   ) %>%
   as_tibble(rownames = "gene_id")
 
 
 #### write the expresiion matrix and the phenotype data out
-write_feather(comb_batch, paste0(data_folder, "/combined/comb_uf.feather"))
+write_feather(comb_batch, paste0(data_folder, "/combined/comb_uf_batch.feather"))
+write_feather(comb_mat, paste0(data_folder, "/combined/comb_uf_raw.feather"))
 write_tsv(comb_pheno, paste0(data_folder, "/combined/comb_uf_pheno.tsv"))

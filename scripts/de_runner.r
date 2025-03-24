@@ -42,37 +42,33 @@ expr_vst <-
 deseq_res_phase <- lapply(
   named_groups,
   function(group_name) {
-    print(group_name)
-    deseq_top <-
-      dds_maker(
-        raw_mat %>% select(c("gene_id", contains(group_name))),
-        diffterm %>% filter(group == group_name),
-        ~cyclephase,
-        filter_ids = filter_ids
-      ) %>%
-      deseq_results(comps, annot, groupterm = "cyclephase")
-    deseq_top_genes <- extract_top(deseq_top)
-    return(c(deseq_top, deseq_top_genes))
+    dds_maker(
+      raw_mat %>% select(c("gene_id", contains(group_name))),
+      diffterm %>% filter(group == group_name),
+      ~cyclephase,
+      filter_ids = filter_ids
+    ) %>%
+      deseq_results(comps, annot, groupterm = "cyclephase") %>%
+      bind_rows(.id = "comparison")
   }
-)
+) %>%
+  bind_rows(.id = "methods")
 
 voom_res_phase <- lapply(
   named_groups,
   function(group_name) {
-    print(group_name)
-    voom_top <-
-      edger_maker(
-        raw_mat %>% select(c("gene_id", contains(group_name))),
-        diffterm %>% filter(group == group_name),
-        "cyclephase",
-        filter_ids
-      ) %>%
+    edger_maker(
+      raw_mat %>% select(c("gene_id", contains(group_name))),
+      diffterm %>% filter(group == group_name),
+      "cyclephase",
+      filter_ids
+    ) %>%
       voom_maker(comps) %>%
-      voom_results(comps, annot)
-    voom_top_genes <- extract_top(voom_top)
-    return(c(voom_top, voom_top_genes))
+      voom_results(comps, annot) %>%
+      bind_rows(.id = "comparison")
   }
-)
+) %>%
+  bind_rows(.id = "methods")
 
 
 # also run the differential analysis for between the UF and Biopsy
@@ -96,34 +92,39 @@ comps <- list(
 deseq_res_group <- lapply(
   named_groups,
   function(group_name) {
-    print(group_name)
-    deseq_top <-
-      dds_maker(
-        raw_mat %>% select(c("gene_id", samples_in_group[[group_name]])),
-        diffterm %>% filter(cyclephase == group_name),
-        ~ group,
-        filter_ids = filter_ids
-      ) %>%
-      deseq_results(comps, annot, groupterm = "group")
-    deseq_top_genes <- extract_top(deseq_top)
-    return(c(deseq_top, deseq_top_genes))
+    dds_maker(
+      raw_mat %>% select(c("gene_id", samples_in_group[[group_name]])),
+      diffterm %>% filter(cyclephase == group_name),
+      ~ group,
+      filter_ids = filter_ids
+    ) %>%
+      deseq_results(comps, annot, groupterm = "group") %>%
+      .[[1]] # unwrap the first element
   }
-)
+) %>%
+  bind_rows(.id = "comparison")
 
 voom_res_group <- lapply(
   named_groups,
   function(group_name) {
-    print(group_name)
-    voom_top <-
-      edger_maker(
-        raw_mat %>% select(c("gene_id", samples_in_group[[group_name]])),
-        diffterm %>% filter(cyclephase == group_name),
-        "group",
-        filter_ids
-      ) %>%
+    edger_maker(
+      raw_mat %>% select(c("gene_id", samples_in_group[[group_name]])),
+      diffterm %>% filter(cyclephase == group_name),
+      "group",
+      filter_ids
+    ) %>%
       voom_maker(comps) %>%
-      voom_results(comps, annot)
-    voom_top_genes <- extract_top(voom_top)
-    return(c(voom_top, voom_top_genes))
+      voom_results(comps, annot) %>%
+      .[[1]] # unwrap the first element
   }
-)
+) %>%
+  bind_rows(.id = "comparison")
+
+### OUTPUT
+# write out the DE result
+de_folder <- paste0(data_subfolder, "/de")
+if (!dir.exists(de_folder)) dir.create(de_folder)
+deseq_res_phase %>% write_feather(paste0(de_folder, "deseq_phases.feather"))
+voom_res_phase %>% write_feather(paste0(de_folder, "voom_phases.feather"))
+deseq_res_group %>% write_feather(paste0(de_folder, "deseq_methods.feather"))
+voom_res_group %>% write_feather(paste0(de_folder, "voom_methods.feather"))
