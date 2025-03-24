@@ -57,9 +57,10 @@ raw_data_folder = getenv("RAW_DATA_FOLDER")
 snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
 ccht_data_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw.feather"
 ccht_pheno_loc = Path(data_folder).expanduser() / "filtered" / "phenotype.tsv"
+comb_data_loc = Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather"
+comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_uf_pheno.tsv"
 fractions_folder = Path(data_folder) / "tape_fractions"
 fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
-
 ```
 
 Load in the datasets:
@@ -67,6 +68,8 @@ Load in the datasets:
 * the reference single cell dataset from the HECAv2 (`sc_dat`).
 * bulk transcriptomes from UF derived EV's of endometrium and biopsies (`ccht_uf_raw`).
 * phenotype table for the EV and biopsy samples (`ccht_uf_pheno`).
+* bulk transcriptomes from UF derived EV's of endometrium and Vigano et al. EV transcriptomes (`comb_uf_raw`).
+* phenotype table for the EV and Vigano et al. samples (`comb_uf_pheno`).
 
 The HECA dataset is renormalised with the `omicsverse` v1.6.7 package's `preprocess` function with the following command `ov.pp.preprocess(sc_dat, mode="pearson|pearson", n_HVGs=3000)`. This normalises the dataset with the Pearson method (??? et al (check the documentation)).
 
@@ -86,6 +89,15 @@ ccht_uf_pheno = pd.read_table(ccht_pheno_loc).set_index("samplename").assign(
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator and samplename in @ccht_uf_raw.columns")
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
 
+## load in the EV combined dataset
+comb_uf_raw = pd.read_feather(comb_data_loc).set_index("gene_id").iloc[:-1]
+comb_uf_pheno = pd.read_table(comb_pheno_loc).set_index("samplename").assign(
+    cyclephase=lambda x: 
+      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
+    )
+comb_uf_pheno = comb_uf_pheno.query("samplename not in @terminator and samplename in @comb_uf_raw.columns")
+comb_uf_raw = comb_uf_raw.drop(columns=terminator[terminator in comb_uf_raw.columns.tolist()])
+
 ## load in the fractions predicted by the latest trained model
 frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
 
@@ -99,16 +111,26 @@ general_cells = ( # associate celltypes with the lineage information in the sc_d
 
 # Color scale for the celltypes - TODO: extende the color range to not repeat
 global_color_scale = alt.Scale(domain=general_cells.index.unique().tolist())
-
 ```
 
 We also load in the different statistical testing tables for CCHT dataset.
 
 ```{python}
-
 ccht_bio_stat = pd.read_excel(fractions_folder / "ccht_bio.xlsx", index_col=0)
 ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
+```
 
+And the featurecounts results for the samples from the MultiQC report.
+
+```{python}
+features_ev = (
+  pd.read_table(
+    Path(raw_data_folder) / "multiqc_star_rsem/multiqc_data/multiqc_featurecounts_biotype_plot.txt"
+    )
+  .rename(columns={"Sample": "samplename"})
+  .query("samplename in @frac_pred.index")
+  .set_index("samplename")
+)
 ```
 
 # Methods
@@ -117,8 +139,9 @@ ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
 
 Raw sequencing reads were preprocessed with the "rnaseq" pipeline (v3.12.0) from nf-core [[Ewels et al](10.5281/zenodo.1400710)]. The pipeline was configured to map reads to the GRCh37 genome using the STAR tool and after mapping, quantified with RSEM algorithm [[RSEM](10.1186/1471-2105-12-323) [STAR](10.1093/bioinformatics/bts635)].
 
-```{bash filename="Command for running nf-core/rnaseq"}
-
+```{bash}
+#| eval: false
+#| echo: true
 ## nf-core/rnaseq v3.12 (https://nf-co.re/rnseq/3.12.0)
 nextflow run nf-core/rnaseq \
   -r 3.12.0 \
@@ -128,7 +151,6 @@ nextflow run nf-core/rnaseq \
   --outdir "./results_mrna/" \
   -c nextflow.config \
   -profile singularity
-
 ```
 
 ## DE analysis
@@ -146,7 +168,8 @@ Downstream analysis was done in R and Python programming languages. For differen
 This study is based on cell type deconvolution of bulk RNA-seq samples using scRNA-seq reference. For deconvolution analysis we used the [TAPE](https://www.nature.com/articles/s41467-022-34550-9) algorithm and trained the model using the [HECA](https://doi.org/10.1101/2023.11.03.564728) endometrial cell atlas.
 
 ```{python}
-#| output: echo
+#| eval: false
+#| echo: true
 
 model_params = {
   "celltype_key": "celltype",
@@ -164,7 +187,6 @@ frac_params = {
   "scaler": "ss", # harmonises distributions better
   "mode": "high-resolution" # for using VAE's for cell type inference
 }
-
 ```
 
 
@@ -188,35 +210,72 @@ study_schema = spacer_with_text(height=400, width=580)
 ```{python}
 # barplot of the number of samples throughout the cycle phase
 barplot_ev_sum = alt.Chart(ccht_uf_pheno).mark_bar().encode(
-  x=alt.X("cyclephase:N"),
+  x=alt.X("cyclephase:N").title(""),
   y=alt.Y("count(group):Q").title("Nr. of Samples"),
-  color=alt.Color("group:N")
-).properties(width=120, height=250)
+  color=alt.Color("group:N").legend(orient="bottom", titleOrient="left")
+).properties(width=150, height=225)
 
 
 # include single cell data overview as extra column
 barplot_sc_sum = alt.Chart(
   sc_dat.obs[["cyclephase", "samplename", "dataset"]].drop_duplicates()
 ).mark_bar().encode(
-  x=alt.X("cyclephase:N"),
+  x=alt.X("cyclephase:N").title("").axis(labelAngle=-45),
   y=alt.Y("count(dataset):Q").title("Nr. of Donors"),
-  color=alt.Color("dataset:N")
-).properties(width=120, height=250)
+  color=alt.Color("dataset:N").legend(orient="bottom", titleOrient="top", columns=2)
+).properties(width=150, height=225)
 
 (barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent")
-
 ```
 
-### UMAP of the samples? {.unnumbered .unlisted}
+### TODO: Clustering distances of the samples? {.unnumbered .unlisted}
 
-### Feature Counts? {.unnumbered .unlisted}
+Or maybe a small heatmap with the sample list on the bottom and the Mahalanobis distances in UMAP, PCA and just non-dim-reduction mah distances from the mean groups of cycle phases. Show the closest group and how far is it in scale invariate units as a heatmap.
+
+### Feature Counts {.unnumbered .unlisted}
+
+Plot top features per FeatureCounts output on log scale. Show the cutoff point for QC of 5% miRNA reads.
+
+```{python}
+# Identify biotype columns and calculate total counts
+biotype_cols = features_ev.columns
+biotype_counts = features_ev[biotype_cols].sum().sort_values(ascending=False)
+
+# Get the top 15 biotypes
+top_biotypes = biotype_counts.head(15).index.tolist()
+
+# Melt the DataFrame for plotting, including only the top 5 biotypes
+df_melted = (
+  features_ev
+  .reset_index()
+  .melt(id_vars=['samplename'], value_vars=top_biotypes, var_name='biotype', value_name='count')
+)
+
+# Create a new column for the sample group
+df_melted['sample_group'] = df_melted['samplename'].apply(lambda x: 'biopsy' if 'biopsy' in x else 'UF')
+
+# Create the grouped boxplot
+featurecounts_chart = alt.Chart(df_melted).mark_boxplot(extent=1.5).encode(
+  x=alt.X('biotype:N', title='Biotype', sort=top_biotypes).axis(labelAngle=-30),
+  y=alt.Y('count:Q', title='Count (log)').scale(type="log", nice=True).axis(values=[1e3, 1e4, 1e5, 1e6, 1e7, 1e8]),
+  color=alt.Color('sample_group:N', title='Sample Group').legend(orient="top", titleOrient="left"),
+  xOffset='sample_group:N',
+  tooltip=['samplename', 'biotype', 'count', 'sample_group'],
+).properties(
+  height=150,
+  width=550
+)
+
+featurecounts_chart.show()
+```
 
 :::
 
 ```{python}
-
-(study_schema | (barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent"))
-
+(
+  (study_schema & featurecounts_chart).resolve_scale(color="independent") | 
+  (barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent")
+)
 ```
 
 ## FIG 2: Cell Type Deconvolution Profiles throughout the Menstrual Cycle
@@ -228,7 +287,6 @@ barplot_sc_sum = alt.Chart(
 ### Proportions Plot of both Biopsy and EV {.unnumbered .unlisted}
 
 ```{python}
-
 fractions_long = peruvian_transform(
   fractions=frac_pred,
   phenotype=ccht_uf_pheno,
@@ -244,13 +302,11 @@ peruvian_bio_ev = peruvian_grouped(
 )
 
 peruvian_bio_ev.show()
-
 ```
 
 ### Biplot of the Fractions {.unnumbered .unlisted}
 
 ```{python}
-
 biplot, pca = biplot_fractions(
   frac_pred,
   ccht_uf_pheno,
@@ -260,13 +316,11 @@ biplot, pca = biplot_fractions(
   dims = (400, 400)
   )
 biplot.show()
-
 ```
 
 In addition, make a histogram of the main loadings to make the contributions more clearer. `TODO: make it into percentages?`
 
 ```{python}
-
 def format_loadings(pca_obj, celltypes):
   """
   Get the euclidean distance of explained variance per component of `pca_obj`.
@@ -310,7 +364,6 @@ loadings_plt = alt.Chart(loadings_combined).mark_line(
 )
 
 loadings_plt.show()
-
 ```
 
 ### Testing the Differences of the Deconvolution Proportions through Cycle Phases {.unnumbered .unlisted}
@@ -412,7 +465,6 @@ comp_stats_bio_plt = (
 ).properties(width=plt_width, height=plt_height)
 
 comp_stats_bio_plt.show()
-
 ```
 
 For the UF samples comparison:
@@ -472,7 +524,6 @@ comp_stats_uf_plt = (
 ).properties(width=plt_width, height=plt_height)
 
 comp_stats_uf_plt.show()
-
 ```
 
 And combined on top of each other
@@ -502,12 +553,12 @@ Here we focus on the comparison of the paired sample profiles from **both** biop
 
 ### Select a tab: {.unnumbered .unlisted}
 
-### Convoluted Deconvolution Plot {.unnumbered .unlisted}
+### Dendro-barplot of Fractions {.unnumbered .unlisted}
 
 ```{python}
 # the dendrogram part
 linkage_mat = linkage(frac_pred, method="complete", optimal_ordering=True)
-dend_obj = dendrogram( linkage_mat, labels=ccht_uf_pheno.index, no_plot=True)
+dend_obj = dendrogram(linkage_mat, labels=ccht_uf_pheno.index, no_plot=True)
 dendro_marks = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
 dendro_coord = get_df_coord(dend_obj)
 
@@ -563,37 +614,36 @@ custom_labels_str =  ', '.join(f"'{label}'" for label in custom_labels)
 
 base_bar = alt.Chart(fractions_long, view=alt.ViewConfig(strokeWidth=0))
 barplot = base_bar.mark_bar(
-  width=8
+  width=12
 ).encode(
   x=alt.X("i:Q").axis(
-      title=None, grid=False, domain=False,
-      tickCount=len(custom_labels),
-      labelAngle=90,
-      labelOverlap=False, 
-      labelExpr=f"[{custom_labels_str}][datum.value]" # custom label values mapped
-    ).scale(domain=[0,len(custom_labels)-1], padding=10),
+    title=None, grid=False, domain=False,
+    tickCount=len(custom_labels),
+    labelAngle=90,
+    labelOverlap=False, 
+    labelExpr=f"[{custom_labels_str}][datum.value]" # custom label values mapped
+  ).scale(domain=[0,len(custom_labels)-1], padding=10),
   y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0,1]),
-  color=alt.Color("celltype:N").scale(scheme="tableau20").legend(columns=2)
+  color=alt.Color("lineage:N").scale(scheme="category10").legend(columns=1)
   )
 
 # add the color groupings 
-x_cycle_colors = barplot.mark_rect(clip=False, width=14).encode(
+x_cycle_colors = barplot.mark_rect(clip=False, width=20).encode(
     y=alt.value(0), # for some reason this works
     y2=alt.value(-4),
     yOffset=alt.value(-12),
-    color=alt.Color("cyclephase:N")
+    color=alt.Color("cyclephase:N").scale(scheme="set1")
   )
-x_method_colors = barplot.mark_rect(clip=False, width=14).encode(
+x_method_colors = barplot.mark_rect(clip=False, width=20).encode(
     y=alt.value(0), # for some reason this works
     y2=alt.value(-16),
     yOffset=alt.value(-24),
-    color=alt.Color("group:N")
+    color=alt.Color("group:N").scale(scheme="set2")
   )
-
 ```
 
 ```{python}
-dendro_barplot = (chart_den + barplot + x_cycle_colors + x_method_colors).resolve_scale(x="shared", y="shared", color="independent").resolve_axis(y="independent").properties(width=500, height=150)
+dendro_barplot = (chart_den + barplot + x_cycle_colors + x_method_colors).resolve_scale(x="shared", y="shared", color="independent").resolve_axis(y="independent").properties(width=700, height=150)
 dendro_barplot.show()
 ```
 
@@ -625,7 +675,6 @@ corr_mat = (
   .join(prepped_pheno[["cyclephase"]], on="x_vars")
   .join(prepped_pheno[["cyclephase"]], on="y_vars", lsuffix="_y")
 )
-
 ```
 
 ```{python}
@@ -663,12 +712,13 @@ final_chart
 ### Venn diagram of the DE genes {.unnumbered .unlisted}
 
 ```{python}
-
+venn_spacer = spacer_with_text(height=350, width=350, text="[insert Venn of DE genes across comparisons here]")
 ```
 
 :::
 
 ```{python}
-(dendro_barplot & final_chart).resolve_scale(color="independent").show()
+(dendro_barplot & (final_chart | venn_spacer)).resolve_scale(color="independent")
 ```
 
+## FIG 4: Comparison of Vigano et al. and our sampling methods

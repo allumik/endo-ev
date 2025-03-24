@@ -2,14 +2,11 @@
 
 library("tidymodels")
 library("tidyverse")
-library("embed")
 library("feather")
 library("stringr")
 library("foreach")
 library("glue")
 library("doParallel")
-library("future")
-library("embed")
 library("readxl")
 library("biomaRt")
 
