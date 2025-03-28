@@ -5,7 +5,7 @@ source("./scripts/de_functions.r")
 
 ## And the data too
 data_subfolder <- paste0(data_folder, "/combined/")
-comb_batch <- read_feather(paste0(data_subfolder, "comb_uf.feather"))
+comb_batch <- read_feather(paste0(data_subfolder, "comb_uf_batch_all.feather"))
 comb_pheno <- read_tsv(paste0(data_subfolder, "comb_uf_pheno.tsv"))
 annot <- read_csv(paste0(raw_data_folder, "/annot_table.csv"))
 

@@ -118,6 +118,7 @@ We also load in the different statistical testing tables for CCHT dataset.
 ```{python}
 ccht_bio_stat = pd.read_excel(fractions_folder / "ccht_bio.xlsx", index_col=0)
 ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
+method_comp = pd.read_excel(fractions_folder / "ccht_uf_vs_bio.xlsx", index_col=0)
 ```
 
 And the featurecounts results for the samples from the MultiQC report.
@@ -132,6 +133,7 @@ features_ev = (
   .set_index("samplename")
 )
 ```
+
 
 # Methods
 
@@ -157,7 +159,10 @@ nextflow run nf-core/rnaseq \
 
 Downstream analysis was done in R and Python programming languages. For differential analysis, we used both DESeq2 and limma-voom algorithms to measure the differences between gene expression levels in different sample groups and to perform statistical testing on the gene-wise differences [[DESeq2](), [limma-voom]()]. While DESeq2 DE results were used for downstream analysis, we used the limma-voom toolset as an alternative approach as it has been shown to have more stringent multiple hypothesis testing in regards to type I error [source: find that benchmarking paper].
 
-[TODO: check up the biomarker reports `ev_biomarker.rmd`]
+```{python}
+de_ccht_phases = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_phases.feather")
+de_ccht_group = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_methods.feather")
+```
 
 ## QC and sample selection
 
@@ -709,10 +714,11 @@ final_chart = (x_group_colors + y_group_colors + base_heatmap).resolve_scale(
 final_chart
 ```
 
-### Venn diagram of the DE genes {.unnumbered .unlisted}
+### Volcano plot with the difference in deconvolution profiles {.unnumbered .unlisted}
 
 ```{python}
-venn_spacer = spacer_with_text(height=350, width=350, text="[insert Venn of DE genes across comparisons here]")
+# venn_spacer = spacer_with_text(height=350, width=350, text="[insert Venn of DE genes across comparisons here]")
+volcano_chart = alt.Chart().mark_point()
 ```
 
 :::

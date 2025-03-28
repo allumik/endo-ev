@@ -7,6 +7,7 @@ from typing import Tuple
 from scipy.stats import spearmanr
 from scipy.stats import f_oneway
 from scipy.stats import chi2
+from scipy.stats import ttest_ind
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from sklearn.decomposition import PCA
 
@@ -26,32 +27,38 @@ def convert_to_long(fracs, pheno) -> pd.DataFrame:
     .merge(pheno, left_index=True, right_index=True)
   )
 
+def ttest_table(fracs_long, testing_col="cyclephase", grouping_col="celltype") -> pd.DataFrame:
+  ttest_res = {
+    grouping_var:
+      ttest_ind(*[dat.query(f"`{testing_col}` == @cycle")["ratio"] for cycle in dat[testing_col].unique()])
+    for grouping_var, dat in fracs_long.groupby(grouping_col)
+  }
+  return pd.DataFrame(ttest_res).T.set_axis(["t-stat", "p-val"], axis=1)
+
+
 # Perform one-way ANOVA and Tukey's test as a function for grouping
-def pairwise_tukey_df(dat) -> pd.DataFrame:
-  tukey_res = pairwise_tukeyhsd(
-      dat["ratio"],
-      dat["cyclephase"],
-    )._results_table
+def pairwise_tukey_df(dat, testing_col="cyclephase") -> pd.DataFrame:
+  tukey_res = pairwise_tukeyhsd(dat["ratio"], dat[testing_col])._results_table
   return pd.DataFrame(
     data=tukey_res.data[1:],
     columns=tukey_res.data[0]
   )
 
-def tukey_table(fracs_long) -> pd.DataFrame:
+def tukey_table(fracs_long, testing_col="cyclephase", grouping_col="celltype") -> pd.DataFrame:
   tukey_res = {
     celltype:
-      pairwise_tukey_df(dat)
-    for celltype, dat in fracs_long.groupby("celltype")
+      pairwise_tukey_df(dat, testing_col=testing_col)
+    for celltype, dat in fracs_long.groupby(grouping_col)
   }
   return pd.concat(
-    tukey_res, keys=tukey_res.keys(), names=["celltype"]
-    ).reset_index(level='celltype')
+    tukey_res, keys=tukey_res.keys(), names=[grouping_col]
+    ).reset_index(level=grouping_col)
 
-def anova_table(fracs_long) -> pd.DataFrame:
+def anova_table(fracs_long, testing_col="cyclephase", grouping_col="celltype") -> pd.DataFrame:
   anova_res = {
-    celltype:
-      f_oneway(*[dat.query("cyclephase == @cycle")["ratio"] for cycle in dat.cyclephase.unique()])
-    for celltype, dat in fracs_long.groupby("celltype")
+    grouping_var:
+      f_oneway(*[dat.query(f"`{testing_col}` == @cycle")["ratio"] for cycle in dat[testing_col].unique()])
+    for grouping_var, dat in fracs_long.groupby(grouping_col)
   }
   return pd.DataFrame(anova_res).T.set_axis(["f-stat", "p-val"], axis=1)
 

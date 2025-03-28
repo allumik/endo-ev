@@ -43,11 +43,11 @@ ev_comb_pheno <-
 
 
 #### Join the datasets
-# join the dataset itself
+# join the dataset itself and don't filter out 
 comb_mat <-
   list("HUT" = hut_mat, "Vigano" = ev_comb) %>%
   reduce(inner_join, by = "external_gene_name") %>%
-  select(!ends_with("biopsy") & !ends_with("biopsy_1"))
+  select(!ends_with("biopsy_1")) # !ends_with("biopsy") & 
 
 # harmonise the pheno file and add batch parameter
 # grouping says the sample type (EV/Biopsy)
@@ -70,7 +70,7 @@ comb_batch <-
   as.matrix %>%
   sva::ComBat_seq(
     batch = comb_pheno$dataset,
-    group = comb_pheno$cyclephase
+    group = setNames(comb_pheno$cyclephase, comb_pheno$group)
   ) %>%
   as_tibble(rownames = "gene_id")
 
