@@ -122,7 +122,7 @@ voom_res_group <- lapply(
 
 ### OUTPUT
 # write out the DE result
-de_folder <- paste0(data_subfolder, "/de")
+de_folder <- paste0(data_subfolder, "/de/")
 if (!dir.exists(de_folder)) dir.create(de_folder)
 deseq_res_phase %>% write_feather(paste0(de_folder, "deseq_phases.feather"))
 voom_res_phase %>% write_feather(paste0(de_folder, "voom_phases.feather"))

@@ -5,7 +5,7 @@ source("./scripts/de_functions.r")
 
 ## And the data too
 data_subfolder <- paste0(data_folder, "/combined/")
-comb_batch <- read_feather(paste0(data_subfolder, "comb_uf_batch_all.feather"))
+comb_batch <- read_feather(paste0(data_subfolder, "comb_all_batch.feather"))
 comb_pheno <- read_tsv(paste0(data_subfolder, "comb_uf_pheno.tsv"))
 annot <- read_csv(paste0(raw_data_folder, "/annot_table.csv"))
 
@@ -153,7 +153,7 @@ voom_res_group <- lapply(
 
 ### OUTPUT
 # write out the DE result
-de_folder <- paste0(data_subfolder, "/de")
+de_folder <- paste0(data_subfolder, "/de/")
 if (!dir.exists(de_folder)) dir.create(de_folder)
 deseq_res_phase %>% write_feather(paste0(de_folder, "deseq_phases.feather"))
 voom_res_phase %>% write_feather(paste0(de_folder, "voom_phases.feather"))

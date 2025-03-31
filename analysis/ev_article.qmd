@@ -61,6 +61,7 @@ comb_data_loc = Path(data_folder).expanduser() / "combined" / "comb_uf_batch.fea
 comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_uf_pheno.tsv"
 fractions_folder = Path(data_folder) / "tape_fractions"
 fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
+fractions_file_loc_comb = fractions_folder / "comb_fracs.tsv"
 ```
 
 Load in the datasets:
@@ -100,6 +101,7 @@ comb_uf_raw = comb_uf_raw.drop(columns=terminator[terminator in comb_uf_raw.colu
 
 ## load in the fractions predicted by the latest trained model
 frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
+frac_comb = pd.read_table(fractions_file_loc_comb, sep="\t", index_col=0)
 
 general_cells = ( # associate celltypes with the lineage information in the sc_dat.obs
   sc_dat.obs
@@ -118,7 +120,7 @@ We also load in the different statistical testing tables for CCHT dataset.
 ```{python}
 ccht_bio_stat = pd.read_excel(fractions_folder / "ccht_bio.xlsx", index_col=0)
 ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
-method_comp = pd.read_excel(fractions_folder / "ccht_uf_vs_bio.xlsx", index_col=0)
+ccht_comp_stat = pd.read_excel(fractions_folder / "ccht_comp.xlsx", index_col=0)
 ```
 
 And the featurecounts results for the samples from the MultiQC report.
@@ -160,8 +162,8 @@ nextflow run nf-core/rnaseq \
 Downstream analysis was done in R and Python programming languages. For differential analysis, we used both DESeq2 and limma-voom algorithms to measure the differences between gene expression levels in different sample groups and to perform statistical testing on the gene-wise differences [[DESeq2](), [limma-voom]()]. While DESeq2 DE results were used for downstream analysis, we used the limma-voom toolset as an alternative approach as it has been shown to have more stringent multiple hypothesis testing in regards to type I error [source: find that benchmarking paper].
 
 ```{python}
-de_ccht_phases = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_phases.feather")
-de_ccht_group = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_methods.feather")
+de_ccht_phases = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_phases.feather").set_index("locus")
+de_ccht_group = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_methods.feather").set_index("locus")
 ```
 
 ## QC and sample selection
@@ -376,7 +378,6 @@ loadings_plt.show()
 Here we create a visual representation of the statistical testing and correlation analysis results of the UF and Biopsy samples. We present the most statistically significant changes throughout the cycle phases.
 
 ```{python}
-## data manipulation for the plot
 def swap_groups(df, to_swap):
   for g1, g2 in to_swap:
     # find that combination of pairs in the dataframe
@@ -687,9 +688,7 @@ corr_mat = (
 base_heatmap = alt.Chart(corr_mat).mark_rect().encode(
     x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
     y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
-    color=alt.Color('correlation:Q', scale=alt.Scale(scheme='magma')) # Quantitative for correlation values, using magma colormap
-  ).properties(
-    title='Correlation of Deconvolution Fractions'
+    color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
   )
 
 # add the color groupings 
@@ -716,15 +715,104 @@ final_chart
 
 ### Volcano plot with the difference in deconvolution profiles {.unnumbered .unlisted}
 
+Here we transform the 
+
 ```{python}
-# venn_spacer = spacer_with_text(height=350, width=350, text="[insert Venn of DE genes across comparisons here]")
-volcano_chart = alt.Chart().mark_point()
+## calculate the diffs
+avg_uf = frac_pred.loc[prepped_pheno.query("group == 'UF'").index,].agg("mean")
+avg_bio = frac_pred.loc[prepped_pheno.query("group == 'biopsy'").index,].agg("mean")
+diff_df = pd.DataFrame({"diff": avg_uf - avg_bio}).join(ccht_comp_stat).rename(columns={"p-val": "pval"})
+
+## base plot
+volcano_base = alt.Chart(
+  diff_df.reset_index(), view=alt.ViewConfig(strokeWidth=0)
+).mark_point(
+  filled=True, opacity=.7
+).encode(
+  x=alt.X("diff:Q").scale(domain=[-.12, .12]).axis(title="difference", tickCount=4),
+  y=alt.Y("pval:Q").scale(type="log", base=10, reverse=True).axis(title="p-value", tickCount=8),
+  color=alt.condition(alt.datum.pval < 0.05, alt.value("red"), alt.value("grey"))
+)
+
+## the text for the top two diff celltypes
+volcano_annot = alt.Chart(
+  diff_df.reset_index().sort_values("pval").head(5).assign(text_angle=lambda x: np.where(x["diff"] < 0, 330, 30))
+).mark_text(align="center", dy=-8, angle=alt.expr(alt.datum.text_angle)).encode(
+  x=alt.X("diff:Q"), y=alt.Y("pval:Q"),
+  text=alt.Text("celltype:N")
+)
+
+## the dividing line
+rule_tmp = pd.DataFrame({"threshold_p": [ .05 ]})
+rule_y = alt.Chart(rule_tmp).mark_rule(color='black', strokeDash=[3,3]).encode(y="threshold_p")
+volcano = volcano_base + volcano_annot + rule_y
+volcano
 ```
 
 :::
 
 ```{python}
-(dendro_barplot & (final_chart | venn_spacer)).resolve_scale(color="independent")
+(dendro_barplot & (final_chart | volcano)).resolve_scale(color="independent")
 ```
 
 ## FIG 4: Comparison of Vigano et al. and our sampling methods
+
+### Correlation Heatmap of UF samples {.unnumbered .unlisted}
+
+```{python}
+# calculate the correlation matrix and prepare data for the plot
+# first we create a phenotype file to order the samples after
+prepped_pheno = (
+  comb_uf_pheno
+  .loc[frac_pred.index]
+  .assign(HUT=lambda x: x.index.str.extract(r"(HUT\d+)", expand=False))
+  .sort_values(["cyclephase", "HUT"])
+)
+
+# select only samples with corresponding HUT pair
+paired_samples_stem = prepped_pheno.HUT.value_counts().to_frame().query("count > 1").index
+prepped_pheno = prepped_pheno.query("HUT in @paired_samples_stem")
+
+# run a corr matrix with itself
+corr_mat = (
+  # transpose to run correlation against the samples
+  frac_pred.loc[prepped_pheno.index].T.corr(method="spearman")
+  # select out only cols with UF in columns and biopsy in rows
+  .filter(regex="UF", axis=0).filter(regex="biopsy", axis=1)
+  # stack it into long version for Altair
+  .stack().rename("correlation").to_frame().reset_index(names=["y_vars", "x_vars"])
+  # now add a cols with the locations of last groups
+  .join(prepped_pheno[["cyclephase"]], on="x_vars")
+  .join(prepped_pheno[["cyclephase"]], on="y_vars", lsuffix="_y")
+)
+```
+
+```{python}
+# Create Altair plot
+base_heatmap = alt.Chart(corr_mat).mark_rect().encode(
+    x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
+    y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
+    color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
+  )
+
+# add the color groupings 
+x_group_colors = base_heatmap.mark_rect().encode(
+  x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None), # Nominal for categorical x-axis
+  color=alt.Color("cyclephase:N"),
+  xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
+)
+
+y_group_colors = base_heatmap.mark_rect().encode(
+  y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None), # Nominal for categorical x-axis
+  color=alt.Color("cyclephase_y:N").legend(None),
+  yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
+)
+
+# Layer heatmap and colors
+final_chart = (x_group_colors + y_group_colors + base_heatmap).resolve_scale(
+  x='shared', y='shared', color='shared'
+)
+
+# Display the chart
+final_chart
+```

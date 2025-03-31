@@ -51,7 +51,7 @@ try: from analysis.helpers.deconvo_functions import *
 except ImportError: from helpers.deconvo_functions import *
 
 ## Do you want to rerun all the models?
-rerun_all = False
+rerun_all = True
 
 ## load the environment variables from the .env file
 load_dotenv() 
@@ -178,12 +178,12 @@ Load in the bulk data from the EV and biopsy samples
 ## load in the EV data
 comb_uf_mat = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf_tpm.feather").set_index("gene_id").iloc[:-1]
 comb_uf_pheno = pd.read_table(Path(data_folder).expanduser() / "combined" / "comb_uf_pheno.tsv").set_index("samplename")
-comb_uf_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf.feather").set_index("gene_id").iloc[:-1]
+comb_uf_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather").set_index("gene_id").iloc[:-1]
 ## filter out some samples
 terminator = ["HUT26_UF", "HUT26_biopsy"]
 comb_uf_pheno = comb_uf_pheno.query("samplename not in @terminator")
 comb_uf_mat = comb_uf_mat.drop(columns=terminator)
-comb_uf_raw = comb_uf_raw.drop(columns=terminator)
+comb_uf_raw = comb_uf_raw.drop(columns=terminator[0])
 ## and reformat and join the data into long data (for better visuals)
 comb_uf = (
   comb_uf_mat
@@ -307,7 +307,7 @@ As the proportions add up to one, we can also generate a stacked barplot for the
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_pred,
   comb_uf_pheno,
   legend_phase_bbox=(1.05, -0.2),
@@ -321,7 +321,7 @@ funk.dendro_barplot(
 ```{python}
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     frac_pred
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -346,14 +346,14 @@ And a stacked area plot showcasing either the UF and biopsy ratio differences...
 
 ```{python}
 
-fractions_long = funk.peruvian_transform(
+fractions_long = peruvian_transform(
   fractions=frac_pred,
   phenotype=comb_uf_pheno,
   general_cells=general_cells,
   grouping_ids=["cyclephase", "group"]
 )
 
-funk.peruvian_grouped(
+peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group"
 ).show()
@@ -364,14 +364,14 @@ funk.peruvian_grouped(
 
 ```{python}
 
-fractions_long = funk.peruvian_transform(
+fractions_long = peruvian_transform(
   fractions=frac_pred,
   phenotype=comb_uf_pheno,
   general_cells=general_cells,
   grouping_ids=["cyclephase", "dataset"]
 )
 
-funk.peruvian_grouped(
+peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="dataset"
 ).show()
@@ -382,8 +382,8 @@ The overall changes throughout the cyclephases averaged over all the samples fro
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(fractions=frac_pred, phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]), 
+peruvian_sands(
+  fractions_df=peruvian_transform(fractions=frac_pred, phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]), 
   legend_col_n=2
 ).show()
 
@@ -392,7 +392,7 @@ funk.peruvian_sands(
 Apply PCA on the proportions.
 
 ```{python}
-funk.biplot_fractions(frac_pred, comb_uf_pheno, color_field="cyclephase", style_field="group")[0]
+biplot_fractions(frac_pred, comb_uf_pheno, color_field="cyclephase", style_field="group")[0]
 ```
 
 Or **by major cell types**:
@@ -411,14 +411,14 @@ frac_pred_gen = pd.DataFrame(
   index=frac_pred.index
 )
 
-funk.dendro_barplot(frac_pred_gen, comb_uf_pheno, legend_class_ncol=2)
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+dendro_barplot(frac_pred_gen, comb_uf_pheno, legend_class_ncol=2)
+peruvian_sands(
+  fractions_df=peruvian_transform(
     fractions=frac_pred.filter(focus_celltypes, axis=1), phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]
     ),
   legend_col_n=1
 ).show()
-funk.biplot_fractions(frac_pred_gen, comb_uf_pheno, color_field="cyclephase", style_field="group")[0]
+biplot_fractions(frac_pred_gen, comb_uf_pheno, color_field="cyclephase", style_field="group")[0]
 """
 
 # generate a temporary file and write the logic there
@@ -455,16 +455,16 @@ Perform ANOVA Tukey HSD and correlation on different hypotheses:
 
 ```{python}
 
-frac_long = funk.convert_to_long(frac_pred.loc[comb_uf_pheno.query("group == 'biopsy'").index], comb_uf_pheno)
+frac_long = convert_to_long(frac_pred.loc[comb_uf_pheno.query("group == 'biopsy'").index], comb_uf_pheno)
 
 # perform the tukey hsd analysis
-tukey_res = funk.tukey_table(frac_long)
+tukey_res = tukey_table(frac_long)
 
 # perform the ANOVA per cell type
-anova_res = funk.anova_table(frac_long)
+anova_res = anova_table(frac_long)
 
 # perform rank correlation with dummy vars
-cor_res = funk.cor_table(frac_long)
+cor_res = cor_table(frac_long)
 
 res_join = (
   tukey_res
@@ -473,8 +473,17 @@ res_join = (
   .rename(columns={"p-val_x": "anova p-val", "p-val_y": "corr p-val"})
 )
 
-res_join.to_excel(fractions_folder / "comb_bio.xlsx", sheet_name="combined_bio")
+```
 
+We are also interested in the difference of biopsy vs UF sampling methods per cell type.
+
+```{python}
+# perform the tukey hsd analysis
+frac_long = convert_to_long(frac_pred.loc[comb_uf_pheno.index], comb_uf_pheno)
+
+ttest_res = ttest_table(frac_long, testing_col="group", grouping_col="celltype")
+
+ttest_res.to_excel(fractions_folder / "comb_comp.xlsx", sheet_name="bio_uf_comp")
 ```
 
 ## Only EV of Combined dataset
@@ -488,7 +497,7 @@ frac_tmp = frac_pred.loc[comb_uf_pheno.query("group == 'UF'").index]
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_tmp,
   comb_uf_pheno,
   legend_phase_bbox=(1.05, -0.2),
@@ -498,7 +507,7 @@ funk.dendro_barplot(
   )
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     frac_tmp
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -523,14 +532,14 @@ Stacked barplot showing the dataset differences.
 
 ```{python}
 
-fractions_long = funk.peruvian_transform(
+fractions_long = peruvian_transform(
   fractions=frac_tmp,
   phenotype=comb_uf_pheno,
   general_cells=general_cells,
   grouping_ids=["cyclephase", "dataset"]
 )
 
-funk.peruvian_grouped(
+peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="dataset"
 ).show()
@@ -541,8 +550,8 @@ The overall changes throughout the cyclephases averaged over all the samples fro
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(fractions=frac_tmp, phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]), 
+peruvian_sands(
+  fractions_df=peruvian_transform(fractions=frac_tmp, phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]), 
   legend_col_n=2
 ).show()
 
@@ -551,7 +560,7 @@ funk.peruvian_sands(
 Apply PCA on the proportions.
 
 ```{python}
-funk.biplot_fractions(frac_tmp, comb_uf_pheno, color_field="cyclephase", style_field="group")[0]
+biplot_fractions(frac_tmp, comb_uf_pheno, color_field="cyclephase", style_field="group")[0]
 ```
 
 Or **by major cell types**:
@@ -570,14 +579,14 @@ frac_pred_gen = pd.DataFrame(
   index=frac_tmp.index
 )
 
-funk.dendro_barplot(frac_pred_gen, comb_uf_pheno, legend_class_ncol=2)
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+dendro_barplot(frac_pred_gen, comb_uf_pheno, legend_class_ncol=2)
+peruvian_sands(
+  fractions_df=peruvian_transform(
     fractions=frac_tmp.filter(focus_celltypes, axis=1), phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]
     ),
   legend_col_n=1
 ).show()
-funk.biplot_fractions(frac_pred_gen, comb_uf_pheno, color_field="cyclephase", style_field="dataset")[0]
+biplot_fractions(frac_pred_gen, comb_uf_pheno, color_field="cyclephase", style_field="dataset")[0]
 """
 
 # generate a temporary file and write the logic there
@@ -612,16 +621,16 @@ Perform ANOVA Tukey HSD and correlation on different hypotheses:
 
 ```{python}
 
-frac_long = funk.convert_to_long(frac_tmp, comb_uf_pheno)
+frac_long = convert_to_long(frac_tmp, comb_uf_pheno)
 
 # perform the tukey hsd analysis
-tukey_res = funk.tukey_table(frac_long)
+tukey_res = tukey_table(frac_long)
 
 # perform the ANOVA per cell type
-anova_res = funk.anova_table(frac_long)
+anova_res = anova_table(frac_long)
 
 # perform rank correlation with dummy vars
-cor_res = funk.cor_table(frac_long)
+cor_res = cor_table(frac_long)
 
 res_join = (
   tukey_res
@@ -647,7 +656,7 @@ As the proportions add up to one, we can also generate a stacked barplot for the
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_tmp,
   comb_uf_pheno,
   legend_phase_bbox=(1.05, -0.2),
@@ -658,7 +667,7 @@ funk.dendro_barplot(
 
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     frac_tmp
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -683,14 +692,14 @@ Stacked barplot showing the dataset differences.
 
 ```{python}
 
-fractions_long = funk.peruvian_transform(
+fractions_long = peruvian_transform(
   fractions=frac_tmp,
   phenotype=comb_uf_pheno,
   general_cells=general_cells,
   grouping_ids=["cyclephase", "dataset"]
 )
 
-funk.peruvian_grouped(
+peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="dataset"
 ).show()
@@ -701,8 +710,8 @@ The overall changes throughout the cyclephases averaged over all the samples fro
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(fractions=frac_tmp, phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]), 
+peruvian_sands(
+  fractions_df=peruvian_transform(fractions=frac_tmp, phenotype=comb_uf_pheno, grouping_ids=["cyclephase"]), 
   legend_col_n=2
 ).show()
 
@@ -712,7 +721,7 @@ funk.peruvian_sands(
 Apply PCA on the proportions.
 
 ```{python}
-funk.biplot_fractions(frac_tmp, comb_uf_pheno, color_field="cyclephase", style_field="dataset")[0]
+biplot_fractions(frac_tmp, comb_uf_pheno, color_field="cyclephase", style_field="dataset")[0]
 ```
 
 Or **by major cell types**:
@@ -730,17 +739,16 @@ Perform ANOVA Tukey HSD and correlation on different hypotheses:
 * How strong is the trend of changing values throughout the cycle phases? -> rank correlation throughout the cycle phases in temporal order.
 
 ```{python}
-
-frac_long = funk.convert_to_long(frac_tmp, comb_uf_pheno)
+frac_long = convert_to_long(frac_tmp, comb_uf_pheno)
 
 # perform the tukey hsd analysis
-tukey_res = funk.tukey_table(frac_long)
+tukey_res = tukey_table(frac_long)
 
 # perform the ANOVA per cell type
-anova_res = funk.anova_table(frac_long)
+anova_res = anova_table(frac_long)
 
 # perform rank correlation with dummy vars
-cor_res = funk.cor_table(frac_long)
+cor_res = cor_table(frac_long)
 
 res_join = (
   tukey_res
@@ -750,7 +758,6 @@ res_join = (
 )
 
 res_join.to_excel(fractions_folder / "comb_bio.xlsx", sheet_name="combined_bio")
-
 ```
 
 
@@ -789,7 +796,7 @@ As the proportions still add up to one, we can also generate a stacked barplot f
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_pred,
   ccht_uf_pheno,
   legend_phase_bbox=(1.05, 0.1),
@@ -799,7 +806,7 @@ funk.dendro_barplot(
   )
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     frac_pred
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -824,14 +831,14 @@ And a stacked area plot showcasing either the UF and biopsy ratio differences.
 
 ```{python}
 
-fractions_long = funk.peruvian_transform(
+fractions_long = peruvian_transform(
   fractions=frac_pred,
   phenotype=ccht_uf_pheno,
   general_cells=general_cells,
   grouping_ids=["cyclephase", "group"]
 )
 
-funk.peruvian_grouped(
+peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group"
 ).show()
@@ -842,8 +849,8 @@ The overall changes throughout the cyclephases averaged over all the samples fro
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(fractions=frac_pred, phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]), 
+peruvian_sands(
+  fractions_df=peruvian_transform(fractions=frac_pred, phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]), 
   legend_col_n=2
 ).show()
 
@@ -853,7 +860,7 @@ funk.peruvian_sands(
 Apply PCA on the proportions.
 
 ```{python}
-funk.biplot_fractions(frac_pred, ccht_uf_pheno, color_field="cyclephase", style_field="group")[0]
+biplot_fractions(frac_pred, ccht_uf_pheno, color_field="cyclephase", style_field="group")[0]
 ```
 
 Or **by major cell types**:
@@ -872,14 +879,14 @@ frac_pred_gen = pd.DataFrame(
   index=frac_pred.index
 )
 
-funk.dendro_barplot(frac_pred_gen, ccht_uf_pheno, legend_class_ncol=2)
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+dendro_barplot(frac_pred_gen, ccht_uf_pheno, legend_class_ncol=2)
+peruvian_sands(
+  fractions_df=peruvian_transform(
     fractions=frac_pred.filter(focus_celltypes, axis=1), phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]
     ),
   legend_col_n=1
 ).show()
-funk.biplot_fractions(frac_pred_gen, ccht_uf_pheno, color_field="cyclephase", style_field="group")[0]
+biplot_fractions(frac_pred_gen, ccht_uf_pheno, color_field="cyclephase", style_field="group")[0]
 """
 
 # generate a temporary file and write the logic there
@@ -906,37 +913,17 @@ with open(tmp_section_f, 'w') as section_f:
 
 :::
 
-Perform ANOVA Tukey HSD and correlation on different hypotheses:
-
-* Is there a significant change over different cycle phases for some cell type? -> ANOVA over cell cycle phase.
-* How significant are differences in cell proportions between pairwise comparisons of all the cell types? -> Tukey's test between cell cycle phase groups within a cell type.
-* How strong is the trend of changing values throughout the cycle phases? -> rank correlation throughout the cycle phases in temporal order.
-
-*NB!* Due to our interest in UF samples separately in the next chapter, we are looking at only the biopsy samples in this case.
+We are also interested in the difference of biopsy vs UF sampling methods per cell type.
 
 ```{python}
-
-frac_long = funk.convert_to_long(frac_pred.loc[ccht_uf_pheno.query("group == 'biopsy'").index], ccht_uf_pheno)
-
 # perform the tukey hsd analysis
-tukey_res = funk.tukey_table(frac_long)
+frac_long = convert_to_long(frac_pred.loc[ccht_uf_pheno.index], ccht_uf_pheno)
 
-# perform the ANOVA per cell type
-anova_res = funk.anova_table(frac_long)
+ttest_res = ttest_table(frac_long, testing_col="group", grouping_col="celltype")
 
-# perform rank correlation with dummy vars
-cor_res = funk.cor_table(frac_long)
-
-res_join = (
-  tukey_res
-  .merge(anova_res.reset_index().rename(columns={"index": "celltype"}), on="celltype")
-  .merge(cor_res.reset_index().rename(columns={"index": "celltype"}), on="celltype")
-  .rename(columns={"p-val_x": "anova p-val", "p-val_y": "corr p-val"})
-)
-
-res_join.to_excel(fractions_folder / "ccht_bio.xlsx", sheet_name="ccht_bio")
-
+ttest_res.to_excel(fractions_folder / "ccht_comp.xlsx", sheet_name="bio_uf_comp")
 ```
+
 
 ## Only CCHT-EV
 
@@ -951,7 +938,7 @@ frac_tmp = frac_pred.loc[ccht_uf_pheno.query("group == 'UF'").index]
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_tmp,
   ccht_uf_pheno,
   legend_phase_bbox=(1.05, .1),
@@ -961,7 +948,7 @@ funk.dendro_barplot(
   )
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     frac_tmp
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -986,8 +973,8 @@ The overall changes throughout the cyclephases averaged over all the samples fro
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(fractions=frac_tmp, phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]), 
+peruvian_sands(
+  fractions_df=peruvian_transform(fractions=frac_tmp, phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]), 
   legend_col_n=2
 ).show()
 
@@ -996,7 +983,7 @@ funk.peruvian_sands(
 Apply PCA on the proportions.
 
 ```{python}
-funk.biplot_fractions(frac_tmp, ccht_uf_pheno, color_field="cyclephase")[0]
+biplot_fractions(frac_tmp, ccht_uf_pheno, color_field="cyclephase")[0]
 ```
 
 Or **by major cell types**:
@@ -1015,14 +1002,14 @@ frac_pred_gen = pd.DataFrame(
   index=frac_tmp.index
 )
 
-funk.dendro_barplot(frac_pred_gen, ccht_uf_pheno, legend_class_ncol=2)
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+dendro_barplot(frac_pred_gen, ccht_uf_pheno, legend_class_ncol=2)
+peruvian_sands(
+  fractions_df=peruvian_transform(
     fractions=frac_tmp.filter(focus_celltypes, axis=1), phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]
     ),
   legend_col_n=1
 ).show()
-funk.biplot_fractions(frac_pred_gen, ccht_uf_pheno, color_field="cyclephase")[0]
+biplot_fractions(frac_pred_gen, ccht_uf_pheno, color_field="cyclephase")[0]
 """
 
 # generate a temporary file and write the logic there
@@ -1056,17 +1043,16 @@ Perform ANOVA Tukey HSD and correlation on different hypotheses:
 * How strong is the trend of changing values throughout the cycle phases? -> rank correlation throughout the cycle phases in temporal order.
 
 ```{python}
-
-frac_long = funk.convert_to_long(frac_tmp, ccht_uf_pheno)
+frac_long = convert_to_long(frac_tmp, ccht_uf_pheno)
 
 # perform the tukey hsd analysis
-tukey_res = funk.tukey_table(frac_long)
+tukey_res = tukey_table(frac_long)
 
 # perform the ANOVA per cell type
-anova_res = funk.anova_table(frac_long)
+anova_res = anova_table(frac_long)
 
 # perform rank correlation with dummy vars
-cor_res = funk.cor_table(frac_long)
+cor_res = cor_table(frac_long)
 
 res_join = (
   tukey_res
@@ -1078,6 +1064,7 @@ res_join = (
 res_join.to_excel(fractions_folder / "ccht_uf.xlsx", sheet_name="ccht_uf")
 
 ```
+
 
 ## Only CCHT biopsy
 
@@ -1092,7 +1079,7 @@ As the proportions still add up to one, we can also generate a stacked barplot f
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_tmp, 
   ccht_uf_pheno,
   legend_phase_bbox=(1.05, .1),
@@ -1103,7 +1090,7 @@ funk.dendro_barplot(
 
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     frac_tmp
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -1128,8 +1115,8 @@ The overall changes throughout the cyclephases averaged over all the samples fro
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(fractions=frac_tmp, phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]), 
+peruvian_sands(
+  fractions_df=peruvian_transform(fractions=frac_tmp, phenotype=ccht_uf_pheno, grouping_ids=["cyclephase"]), 
   legend_col_n=2
 ).show()
 
@@ -1139,7 +1126,7 @@ funk.peruvian_sands(
 Apply PCA on the proportions.
 
 ```{python}
-funk.biplot_fractions(frac_tmp, ccht_uf_pheno, color_field="cyclephase")[0]
+biplot_fractions(frac_tmp, ccht_uf_pheno, color_field="cyclephase")[0]
 ```
 
 Or **by major cell types**:
@@ -1158,16 +1145,16 @@ Perform ANOVA Tukey HSD and correlation on different hypotheses:
 
 ```{python}
 
-frac_long = funk.convert_to_long(frac_tmp, ccht_uf_pheno)
+frac_long = convert_to_long(frac_tmp, ccht_uf_pheno)
 
 # perform the tukey hsd analysis
-tukey_res = funk.tukey_table(frac_long)
+tukey_res = tukey_table(frac_long)
 
 # perform the ANOVA per cell type
-anova_res = funk.anova_table(frac_long)
+anova_res = anova_table(frac_long)
 
 # perform rank correlation with dummy vars
-cor_res = funk.cor_table(frac_long)
+cor_res = cor_table(frac_long)
 
 res_join = (
   tukey_res
@@ -1213,7 +1200,7 @@ As the proportions still add up to one, we can also generate a stacked barplot f
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_pred,
   scratch_pheno,
   legend_phase_bbox=(1.05, .1),
@@ -1229,8 +1216,8 @@ The overall changes throughout the RIF statuses averaged over all the samples fr
 
 ```{python}
 
-funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+peruvian_sands(
+  fractions_df=peruvian_transform(
       fractions=frac_pred, phenotype=scratch_pheno, grouping_ids=["status_rif"]
     ), 
   x_axis_col="status_rif",
@@ -1245,7 +1232,7 @@ Apply PCA on the proportions.
 
 ```{python}
 
-funk.biplot_fractions(
+biplot_fractions(
   frac_pred, scratch_pheno,
   legend_title="RIF stage",
   color_field="status_rif", style_field="no_lb" #, palette="flare"
@@ -1269,14 +1256,14 @@ frac_pred_gen = pd.DataFrame(
   index=frac_pred.index
 )
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_pred_gen,
   scratch_pheno,
   legend_class_ncol=2,
   phenotype_df_col="no_lb"
 )
 
-funk.biplot_fractions(
+biplot_fractions(
   frac_pred_gen, scratch_pheno,
   legend_title="RIF stage",
   color_field="status_rif", style_field="no_lb" #, palette="flare"
@@ -1313,7 +1300,7 @@ Perform t-test for the pairwise differences of RIF and CTRL samples for each cel
 
 ```{python}
 
-frac_long = funk.convert_to_long(frac_pred, scratch_pheno)
+frac_long = convert_to_long(frac_pred, scratch_pheno)
 
 # write the t-testing function
 ttest_table = pd.DataFrame({
@@ -1359,7 +1346,7 @@ As the proportions still add up to one, we can also generate a stacked barplot f
 
 ```{python}
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_pred, 
   clin_uf_pheno,
   legend_phase_bbox=(1.05, .1),
@@ -1375,8 +1362,8 @@ The overall changes throughout the clinical statuses averaged over all the sampl
 
 ```{python}
 
-fig1 = funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+fig1 = peruvian_sands(
+  fractions_df=peruvian_transform(
       fractions=frac_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==1"), grouping_ids=["implantation"]
     ), 
   x_axis_col="implantation",
@@ -1386,8 +1373,8 @@ fig1 = funk.peruvian_sands(
   legend_col_n=2
 )
 
-fig2 = funk.peruvian_sands(
-  fractions_df=funk.peruvian_transform(
+fig2 = peruvian_sands(
+  fractions_df=peruvian_transform(
       fractions=frac_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==2"), grouping_ids=["implantation"]
     ), 
   x_axis_col="implantation",
@@ -1409,7 +1396,7 @@ Apply PCA on the proportions.
 
 ```{python}
 
-funk.biplot_fractions(
+biplot_fractions(
   frac_pred, clin_uf_pheno, 
   legend_title="Implantation", 
   color_field="implantation"
@@ -1433,14 +1420,14 @@ frac_pred_gen = pd.DataFrame(
   index=frac_pred.index
 )
 
-funk.dendro_barplot(
+dendro_barplot(
   frac_pred_gen, 
   clin_uf_pheno, 
   legend_class_ncol=2,
   phenotype_df_col="implantation"
 )
 
-funk.biplot_fractions(
+biplot_fractions(
   frac_pred_gen, clin_uf_pheno, 
   legend_title="Implantation", 
   color_field="implantation" 
@@ -1477,7 +1464,7 @@ Perform t-test for the pairwise differences of RIF and CTRL samples for each cel
 
 ```{python}
 
-frac_long = funk.convert_to_long(frac_pred, clin_uf_pheno).drop(columns=["n_transfer_embryo"])
+frac_long = convert_to_long(frac_pred, clin_uf_pheno).drop(columns=["n_transfer_embryo"])
 
 # write the t-testing function
 ttest_table = pd.DataFrame({
@@ -1509,7 +1496,7 @@ Here we compare the clinical sample fractions with the CCHT HUT sampleset, both 
 # load the fractions
 frac_clin = frac_pred # reuse already processed file
 frac_ccht_mat = pd.read_table(fractions_folder / "ccht_fracs.tsv", sep="\t", index_col=0)
-frac_ccht = funk.convert_to_long(frac_ccht_mat, ccht_uf_pheno.query("group == 'biopsy'"))
+frac_ccht = convert_to_long(frac_ccht_mat, ccht_uf_pheno.query("group == 'biopsy'"))
 
 list_to_df = []
 for cyclephase in frac_ccht.cyclephase.unique():
@@ -1520,7 +1507,7 @@ for cyclephase in frac_ccht.cyclephase.unique():
         cyclephase,
         celltype,
         samplename,
-        funk.mahalanobis_distances(frac_clin.loc[samplename, celltype], ref_vals)
+        mahalanobis_distances(frac_clin.loc[samplename, celltype], ref_vals)
       ])
 
 mah_res = pd.DataFrame(
@@ -1535,7 +1522,7 @@ for cyclephase in frac_ccht.cyclephase.unique():
     mah_res
     .query("cyclephase == @cyclephase")
     .pivot_table(index="samplename", columns="celltype", values="mah_dist")
-    .apply(funk.geometric_mean, axis=1)
+    .apply(geometric_mean, axis=1)
     # .mean(axis=1)
   })
 
@@ -1613,7 +1600,7 @@ sns.scatterplot(x='PC1', y='PC2', hue='group', style="dataset", data=pca_df, pal
 # load the fractions
 frac_clin = scratch_pred # reuse already processed file
 frac_ccht_mat = pd.read_table(fractions_folder / "ccht_fracs.tsv", sep="\t", index_col=0)
-frac_ccht = funk.convert_to_long(frac_ccht_mat, ccht_uf_pheno.query("group == 'biopsy'"))
+frac_ccht = convert_to_long(frac_ccht_mat, ccht_uf_pheno.query("group == 'biopsy'"))
 
 list_to_df = []
 for cyclephase in frac_ccht.cyclephase.unique():
@@ -1624,7 +1611,7 @@ for cyclephase in frac_ccht.cyclephase.unique():
         cyclephase,
         celltype,
         samplename,
-        funk.mahalanobis_distances(frac_clin.loc[samplename, celltype], ref_vals)
+        mahalanobis_distances(frac_clin.loc[samplename, celltype], ref_vals)
       ])
 
 mah_res = pd.DataFrame(
@@ -1639,7 +1626,7 @@ for cyclephase in frac_ccht.cyclephase.unique():
     mah_res
     .query("cyclephase == @cyclephase")
     .pivot_table(index="samplename", columns="celltype", values="mah_dist")
-    .apply(funk.geometric_mean, axis=1)
+    .apply(geometric_mean, axis=1)
     # .mean(axis=1)
   })
 
@@ -1717,7 +1704,7 @@ sns.scatterplot(x='PC1', y='PC2', hue='group', style="dataset", data=pca_df, pal
 # load the fractions
 frac_clin = frac_pred # reuse already processed file
 frac_ccht_mat = pd.read_table(fractions_folder / "ccht_fracs.tsv", sep="\t", index_col=0)
-frac_ccht = funk.convert_to_long(frac_ccht_mat, ccht_uf_pheno.query("group == 'UF'"))
+frac_ccht = convert_to_long(frac_ccht_mat, ccht_uf_pheno.query("group == 'UF'"))
 
 list_to_df = []
 for cyclephase in frac_ccht.cyclephase.unique():
@@ -1728,7 +1715,7 @@ for cyclephase in frac_ccht.cyclephase.unique():
         cyclephase,
         celltype,
         samplename,
-        funk.mahalanobis_distances(frac_clin.loc[samplename, celltype], ref_vals)
+        mahalanobis_distances(frac_clin.loc[samplename, celltype], ref_vals)
       ])
 
 mah_res = pd.DataFrame(
@@ -1743,7 +1730,7 @@ for cyclephase in frac_ccht.cyclephase.unique():
     mah_res
     .query("cyclephase == @cyclephase")
     .pivot_table(index="samplename", columns="celltype", values="mah_dist")
-    .apply(funk.geometric_mean, axis=1)
+    .apply(geometric_mean, axis=1)
     # .mean(axis=1)
   })
 
@@ -1960,15 +1947,6 @@ sns.clustermap(
 
 ```
 
-### Volcano plot
-
-And a volcano plot too if were at it.
-
-```{python}
-
-
-```
-
 :::
 
 ## Do cell types in reference data correlate with deconvolution?
@@ -1978,7 +1956,6 @@ Here we compare how do the raw single cell data cell ratios compare to the CCHT 
 First lets look at clustered barplots of both sc cell ratios and deconvolution ratios for all the CCHT biopsy samples and for all samples in HECA.
 
 ```{python}
-
 # get the cell fractions
 ccht_tmp = ccht_pred.loc[ccht_uf_pheno.query("group == 'biopsy'").index]
 sc_tmp = sc_dat.obs.query("cyclephase not in ['Hormones (Proliferative Early)', 'Hormones']")
@@ -2012,7 +1989,7 @@ join_pheno = pd.concat(
 )
 
 # plot it
-funk.dendro_barplot(
+dendro_barplot(
   join_props,
   join_pheno,
   legend_phase_bbox=(1.05, 0.1),
@@ -2022,7 +1999,7 @@ funk.dendro_barplot(
   )
 
 # do a summarised lineage plot
-funk.dendro_barplot(
+dendro_barplot(
   (
     join_props
     .melt(var_name="celltype", value_name="props", ignore_index=False)
@@ -2040,8 +2017,6 @@ funk.dendro_barplot(
   legend_phase_ncol=1,
   legend_class_ncol=1
   )
-
-
 ```
 
 Then lets separate those ratios per cycle group and see how do they differ between reference and imputation.

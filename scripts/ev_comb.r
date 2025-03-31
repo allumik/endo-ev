@@ -28,7 +28,7 @@ ev_comb <-
   # inner_join(ev_comb, by = "GeneID") %>%
   rename(external_gene_name = GeneID)
 
-# combine the phenotypes
+# combine the phenotype
 ev_comb_pheno <-
   read_excel(
     paste0(raw_data_folder, "/EV_RNAseq_Vigano.xlsx"),
@@ -37,9 +37,10 @@ ev_comb_pheno <-
     tibble(
       samplename = colnames(.),
       cyclephase = c(rep("pre", 12), rep("rec", 12)),
-      grouping = "UF"
+      group = "UF"
     )
-  }
+  } %>%
+  left_join(read_csv(paste0(raw_data_folder, "/vigano_batches.csv")))
 
 
 #### Join the datasets
@@ -53,18 +54,19 @@ comb_mat <-
 # grouping says the sample type (EV/Biopsy)
 # cyclephase the grouping of the cycle timing (pre/rec/post)
 comb_pheno <-
-  list(
-    "HUT" = hut_pheno,
-    "Vigano" = ev_comb_pheno %>% rename(group = grouping)
-  ) %>%
+  list("HUT" = hut_pheno, "Vigano" = ev_comb_pheno) %>%
   bind_rows(.id = "dataset") %>%
+  mutate(dataset = ifelse(dataset == "Vigano", batch, dataset)) %>%
   select(c("samplename", "cyclephase", "dataset", "group")) %>%
   # align the sample order with the matrix
   filter(samplename %in% colnames(comb_mat)) %>%
   arrange(match(samplename, colnames(comb_mat)[-1]))
 
+comb_pheno_uf <- comb_pheno %>% filter(group == "UF") %>% select(-grou)
+
+
 # apply batch normalisation on the dataframes
-comb_batch <-
+comb_batch_all <-
   comb_mat %>%
   column_to_rownames("external_gene_name") %>%
   as.matrix %>%
@@ -74,8 +76,22 @@ comb_batch <-
   ) %>%
   as_tibble(rownames = "gene_id")
 
+# apply batch normalisation on the dataframes - only UF
+comb_batch_uf <-
+  comb_mat %>%
+  select(!ends_with("biopsy")) %>% # select only UF samples
+  column_to_rownames("external_gene_name") %>%
+  as.matrix %>%
+  sva::ComBat_seq(
+    batch = comb_pheno_uf$dataset,
+    group = comb_pheno_uf$cyclephase
+  ) %>%
+  as_tibble(rownames = "gene_id")
+
 
 #### write the expresiion matrix and the phenotype data out
-write_feather(comb_batch, paste0(data_folder, "/combined/comb_uf_batch.feather"))
-write_feather(comb_mat, paste0(data_folder, "/combined/comb_uf_raw.feather"))
-write_tsv(comb_pheno, paste0(data_folder, "/combined/comb_uf_pheno.tsv"))
+write_feather(comb_batch_all, paste0(data_folder, "/combined/comb_all_batch.feather"))
+write_feather(comb_batch_uf, paste0(data_folder, "/combined/comb_uf_batch.feather"))
+write_feather(comb_mat, paste0(data_folder, "/combined/comb_all_raw.feather"))
+write_tsv(comb_pheno_uf, paste0(data_folder, "/combined/comb_uf_pheno.tsv"))
+write_tsv(comb_pheno, paste0(data_folder, "/combined/comb_all_pheno.tsv"))
