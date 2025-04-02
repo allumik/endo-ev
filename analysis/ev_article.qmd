@@ -57,11 +57,10 @@ raw_data_folder = getenv("RAW_DATA_FOLDER")
 snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
 ccht_data_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw.feather"
 ccht_pheno_loc = Path(data_folder).expanduser() / "filtered" / "phenotype.tsv"
-comb_data_loc = Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather"
-comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_uf_pheno.tsv"
+comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_all_pheno.tsv"
 fractions_folder = Path(data_folder) / "tape_fractions"
 fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
-fractions_file_loc_comb = fractions_folder / "comb_fracs.tsv"
+fractions_file_loc_comb = fractions_folder / "comb_uf_fracs.tsv"
 ```
 
 Load in the datasets:
@@ -90,14 +89,14 @@ ccht_uf_pheno = pd.read_table(ccht_pheno_loc).set_index("samplename").assign(
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator and samplename in @ccht_uf_raw.columns")
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
 
-## load in the EV combined dataset
-comb_uf_raw = pd.read_feather(comb_data_loc).set_index("gene_id").iloc[:-1]
-comb_uf_pheno = pd.read_table(comb_pheno_loc).set_index("samplename").assign(
-    cyclephase=lambda x: 
-      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
-    )
-comb_uf_pheno = comb_uf_pheno.query("samplename not in @terminator and samplename in @comb_uf_raw.columns")
-comb_uf_raw = comb_uf_raw.drop(columns=terminator[terminator in comb_uf_raw.columns.tolist()])
+## load in the EV combined dataset phenotype for the fractions
+comb_uf_pheno = (
+  pd.read_table(comb_pheno_loc)
+  .set_index("samplename")
+  .query("samplename not in @terminator")
+  .assign(dataset = lambda x: np.where(x.dataset == "HUT", x.dataset, "Vigano"))
+  .query("cyclephase in ['rec', 'pre'] and group == 'UF'")
+)
 
 ## load in the fractions predicted by the latest trained model
 frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
@@ -760,50 +759,115 @@ volcano
 ### Correlation Heatmap of UF samples {.unnumbered .unlisted}
 
 ```{python}
-# calculate the correlation matrix and prepare data for the plot
-# first we create a phenotype file to order the samples after
-prepped_pheno = (
-  comb_uf_pheno
-  .loc[frac_pred.index]
-  .assign(HUT=lambda x: x.index.str.extract(r"(HUT\d+)", expand=False))
-  .sort_values(["cyclephase", "HUT"])
+# run a corr matrix with itself and select out the interesting rows
+corr_mat = (
+  # transpose to run correlation against the samples, not celltypes
+  frac_comb.loc[comb_uf_pheno.index].T.corr(method="spearman")
+  # select out Vigano and CCHT in both axes
+  .filter(regex="plus", axis=0).filter(regex="UF", axis=1)
 )
 
-# select only samples with corresponding HUT pair
-paired_samples_stem = prepped_pheno.HUT.value_counts().to_frame().query("count > 1").index
-prepped_pheno = prepped_pheno.query("HUT in @paired_samples_stem")
-
-# run a corr matrix with itself
-corr_mat = (
-  # transpose to run correlation against the samples
-  frac_pred.loc[prepped_pheno.index].T.corr(method="spearman")
-  # select out only cols with UF in columns and biopsy in rows
-  .filter(regex="UF", axis=0).filter(regex="biopsy", axis=1)
+corr_long = (
+  corr_mat
   # stack it into long version for Altair
   .stack().rename("correlation").to_frame().reset_index(names=["y_vars", "x_vars"])
   # now add a cols with the locations of last groups
-  .join(prepped_pheno[["cyclephase"]], on="x_vars")
-  .join(prepped_pheno[["cyclephase"]], on="y_vars", lsuffix="_y")
+  .join(comb_uf_pheno[["cyclephase"]], on="x_vars")
+  .join(comb_uf_pheno[["cyclephase"]], on="y_vars", lsuffix="_y")
 )
+```
+
+Generate the X axis linkage plots.
+
+```{python}
+# the dendrogram part for axis X
+linkage_mat = linkage(corr_mat.T, method="complete", optimal_ordering=True)
+dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.query("dataset == 'HUT'").index, no_plot=True)
+dendro_marks_x = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
+dendro_coord = get_df_coord(dend_obj)
+cols_xk = ["xk1", "xk2", "xk3", "xk4"]
+cols_yk = ["yk1", "yk2", "yk3", "yk4"]
+
+# and transform the x and y coords to a suitable scale
+scaler = .2
+x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
+dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
+dendro_coord[cols_xk] *= (dendro_marks_x.shape[0] - 1)
+dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
+dendro_coord[cols_yk] += 1.18 # and shift up whole unit
+
+base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
+# the U shape is composed of a shoulder plus two arms, made with separate lines...
+shoulder = base.mark_rule().encode(
+    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dendro_marks_x)-1]),
+    x2=alt.X2("xk3:Q"),
+    y=alt.Y("yk2:Q", title="").axis(None))
+arm1 = base.mark_rule().encode(
+    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_x)-1]),
+    y=alt.Y("yk1:Q").axis(None),
+    y2=alt.Y2("yk2:Q"))
+arm2 = base.mark_rule().encode(
+    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_x)-1]),
+    y=alt.Y("yk3:Q").axis(None),
+    y2=alt.Y2("yk4:Q"))
+
+# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
+chart_den_x = shoulder + arm1 + arm2
+```
+
+Generate the Y axis linkage plots.
+
+```{python}
+# the dendrogram part for axis Y
+linkage_mat = linkage(corr_mat, method="complete", optimal_ordering=True)
+dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.query("dataset == 'Vigano'").index, no_plot=True)
+dendro_marks_y = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
+dendro_coord = get_df_coord(dend_obj)
+
+# and transform the x and y coords to a suitable scale
+scaler = .20
+x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
+dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
+dendro_coord[cols_xk] *= (dendro_marks_y.shape[0] - 1)
+dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
+dendro_coord[cols_yk] += 1.18 # and shift up whole unit
+
+base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
+# the U shape is composed of a shoulder plus two arms, made with separate lines...
+shoulder = base.mark_rule().encode(
+    y=alt.Y("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dendro_marks_y)-1]),
+    y2=alt.Y2("xk3:Q"),
+    x=alt.X("yk2:Q", title="").axis(None).scale(reverse=True))
+arm1 = base.mark_rule().encode(
+    y=alt.Y("xk1:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_y)-1]),
+    x=alt.X("yk1:Q").axis(None).scale(reverse=True),
+    x2=alt.X2("yk2:Q"))
+arm2 = base.mark_rule().encode(
+    y=alt.Y("xk3:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_y)-1]),
+    x=alt.X("yk3:Q").axis(None).scale(reverse=True),
+    x2=alt.X2("yk4:Q"))
+
+# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
+chart_den_y = shoulder + arm1 + arm2
 ```
 
 ```{python}
 # Create Altair plot
-base_heatmap = alt.Chart(corr_mat).mark_rect().encode(
-    x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
-    y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
+base_heatmap = alt.Chart(corr_long).mark_rect().encode(
+    x=alt.X('x_vars:O', sort=dendro_marks_x.labels, title=None).axis(offset=10),
+    y=alt.Y('y_vars:O', sort=dendro_marks_y.labels, title=None).axis(orient="right", offset=10),
     color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
   )
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
-  x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None), # Nominal for categorical x-axis
+  x=alt.X('x_vars:O', sort=dendro_marks_x, title=None), # Nominal for categorical x-axis
   color=alt.Color("cyclephase:N"),
   xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 y_group_colors = base_heatmap.mark_rect().encode(
-  y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None), # Nominal for categorical x-axis
+  y=alt.Y('y_vars:O', sort=dendro_marks_y, title=None), # Nominal for categorical x-axis
   color=alt.Color("cyclephase_y:N").legend(None),
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
@@ -815,4 +879,9 @@ final_chart = (x_group_colors + y_group_colors + base_heatmap).resolve_scale(
 
 # Display the chart
 final_chart
+```
+
+```{python}
+dendro_corrplot = (final_chart + chart_den_x + chart_den_y).resolve_scale(x="shared", y="shared", color="independent").resolve_axis(y="independent").properties(width=200, height=500)
+dendro_corrplot.show()
 ```
