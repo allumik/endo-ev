@@ -46,6 +46,8 @@ rerun_all = True
 
 ## load the environment variables from the .env file
 load_dotenv()
+if getenv("DATA_FOLDER") is None:
+  load_dotenv(Path.cwd() / ".env")
 
 anndata_folder = getenv("ANNDATA_FOLDER")
 atlas_folder = getenv("ATLAS_FOLDER")
@@ -100,25 +102,26 @@ ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
 Load in the spatial slides experiments
 
 ```{python}
-#| output: false
 
 slides_path = Path(st_folder).expanduser()
 vis_dats = {}
-for vis_fold in slides_path.glob("*/"):
-  slide_id = vis_fold.stem
-  print("Working on slide " + str(slide_id))
-  vis_dat = sc.read_visium(path=vis_fold / "outs")
-  vis_dat.var_names_make_unique()
-  vis_dat.var["mt"] = vis_dat.var_names.str.startswith("MT-")
-  sc.pp.calculate_qc_metrics(vis_dat, qc_vars=["mt"], inplace=True)
+for vis_fold in slides_path.iterdir():
+  if vis_fold.is_dir():
+    slide_id = vis_fold.stem
+    print("Working on slide " + str(slide_id))
+    vis_dat = sc.read_visium(path=vis_fold) # for vento data
+    # vis_dat = sc.read_visium(path=vis_fold / "outs") # for inhouse data
+    vis_dat.var_names_make_unique()
+    vis_dat.var["mt"] = vis_dat.var_names.str.startswith("MT-")
+    sc.pp.calculate_qc_metrics(vis_dat, qc_vars=["mt"], inplace=True)
 
-  vis_dat = vis_dat[:, vis_dat.var['total_counts'] > 100]
-  vis_dat = ov.pp.preprocess(vis_dat, mode='shiftlog|pearson', n_HVGs=3000, target_sum=1e4)
-  ## new recommended preproc - does not work
-  # vis_dat = ov.space.svg(vis_dat, mode="prost", n_svgs=3000, target_sum=1e4, platform="visium")
-  vis_dat.raw = vis_dat
-  vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
-  vis_dats[slide_id] = vis_dat
+    vis_dat = vis_dat[:, vis_dat.var['total_counts'] > 100]
+    vis_dat = ov.pp.preprocess(vis_dat, mode='shiftlog|pearson', n_HVGs=3000, target_sum=1e4)
+    ## new recommended preproc - does not work
+    # vis_dat = ov.space.svg(vis_dat, mode="prost", n_svgs=3000, target_sum=1e4, platform="visium")
+    vis_dat.raw = vis_dat
+    vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
+    vis_dats[slide_id] = vis_dat
 
 vis_keys = list(vis_dats.keys())
 

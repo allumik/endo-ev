@@ -240,7 +240,7 @@ def biplot_fractions(
   loadings_chart = (
     alt.Chart(pd.concat([
       loadings_df, 
-      pd.DataFrame({"index": loadings_df["index"], "PC1": 0, "PC2": 0})
+      pd.DataFrame({"index": loadings_df.iloc[:, 0], "PC1": 0, "PC2": 0})
       ], ignore_index=True))
     .mark_line(color="red", opacity=0.5)  # Use mark_rule instead of mark_line
     .encode(x='PC1:Q', y='PC2:Q', detail="index")

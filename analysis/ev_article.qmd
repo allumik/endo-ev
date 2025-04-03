@@ -61,6 +61,7 @@ comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_all_pheno.t
 fractions_folder = Path(data_folder) / "tape_fractions"
 fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
 fractions_file_loc_comb = fractions_folder / "comb_uf_fracs.tsv"
+fractions_file_loc_comb = fractions_folder / "comb_fracs_raw.tsv"
 ```
 
 Load in the datasets:
@@ -101,6 +102,7 @@ comb_uf_pheno = (
 ## load in the fractions predicted by the latest trained model
 frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
 frac_comb = pd.read_table(fractions_file_loc_comb, sep="\t", index_col=0)
+frac_comb_raw = pd.read_table(fractions_file_loc_comb, sep="\t", index_col=0)
 
 general_cells = ( # associate celltypes with the lineage information in the sc_dat.obs
   sc_dat.obs
@@ -546,7 +548,8 @@ Combining them all into one.
 
 ```{python}
 # have to resolve the color scale, otherwise the loadings_plt will override the biplot's scale
-((peruvian_bio_ev | (biplot & loadings_plt)) & comp_stats_plt).resolve_scale(color="independent").show()
+((peruvian_bio_ev | (biplot & loadings_plt)) & comp_stats_plt
+  ).resolve_scale(color="independent").show()
 # below both of them there should be the directionality plot of DE proportions
 ```
 
@@ -648,7 +651,12 @@ x_method_colors = barplot.mark_rect(clip=False, width=20).encode(
 ```
 
 ```{python}
-dendro_barplot = (chart_den + barplot + x_cycle_colors + x_method_colors).resolve_scale(x="shared", y="shared", color="independent").resolve_axis(y="independent").properties(width=700, height=150)
+dendro_barplot = (
+  (chart_den + barplot + x_cycle_colors + x_method_colors)
+  .resolve_scale(x="shared", y="shared", color="independent")
+  .resolve_axis(y="independent")
+  .properties(width=700, height=150)
+)
 dendro_barplot.show()
 ```
 
@@ -756,6 +764,110 @@ volcano
 
 ## FIG 4: Comparison of Vigano et al. and our sampling methods
 
+::: {.panel-tabset}
+
+### Select a tab: {.unnumbered .unlisted}
+
+### Dendro-barplot of Fractions {.unnumbered .unlisted}
+
+```{python}
+# the dendrogram part
+linkage_mat = linkage(frac_comb.loc[comb_uf_pheno.index,], method="complete", optimal_ordering=True)
+dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.index, no_plot=True)
+dendro_marks = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
+dendro_coord = get_df_coord(dend_obj)
+
+# and transform the x and y coords to a suitable scale
+scaler = .25
+cols_xk = ["xk1", "xk2", "xk3", "xk4"]
+cols_yk = ["yk1", "yk2", "yk3", "yk4"]
+x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
+dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
+dendro_coord[cols_xk] *= (dendro_marks.shape[0] - 1)
+dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
+dendro_coord[cols_yk] += 1.18 # and shift up whole unit
+
+base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
+# the U shape is composed of a shoulder plus two arms, made with separate lines...
+shoulder = base.mark_rule().encode(
+    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
+    x2=alt.X2("xk3:Q"),
+    y=alt.Y("yk2:Q", title="").axis(None))
+arm1 = base.mark_rule().encode(
+    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
+    y=alt.Y("yk1:Q").axis(None),
+    y2=alt.Y2("yk2:Q"))
+arm2 = base.mark_rule().encode(
+    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
+    y=alt.Y("yk3:Q").axis(None),
+    y2=alt.Y2("yk4:Q"))
+
+# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
+chart_den = shoulder + arm1 + arm2
+```
+
+```{python}
+# the barplot part
+# make fracs long again - reuse previous peruvian_transform
+fractions_long = (
+  peruvian_transform(
+    fractions=frac_comb.loc[comb_uf_pheno.index],
+    phenotype=comb_uf_pheno,
+    general_cells=general_cells
+  )
+  .rename(columns={"level_0": "samplename"})
+  .set_index("samplename")
+  .join(dendro_marks.set_index("labels"))
+  .join(comb_uf_pheno)
+  .reset_index()
+  .sort_values("i")
+)
+
+custom_labels = fractions_long.samplename.drop_duplicates().values.tolist()
+# custom printer - by default the list is printed with newlines so that the js parses the list transposed
+custom_labels_str =  ', '.join(f"'{label}'" for label in custom_labels)
+
+base_bar = alt.Chart(fractions_long, view=alt.ViewConfig(strokeWidth=0))
+barplot = base_bar.mark_bar(
+  width=8
+).encode(
+  x=alt.X("i:Q").axis(
+    title=None, grid=False, domain=False,
+    tickCount=len(custom_labels),
+    labelAngle=90,
+    labelOverlap=False, 
+    labelExpr=f"[{custom_labels_str}][datum.value]" # custom label values mapped
+  ).scale(domain=[0,len(custom_labels)-1], padding=10),
+  y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0,1]),
+  color=alt.Color("lineage:N").scale(scheme="category10").legend(columns=1)
+  )
+
+# add the color groupings 
+x_cycle_colors = barplot.mark_rect(clip=False, width=12).encode(
+    y=alt.value(0), # for some reason this works
+    y2=alt.value(-4),
+    yOffset=alt.value(-12),
+    color=alt.Color("cyclephase:N").scale(scheme="set1")
+  )
+x_method_colors = barplot.mark_rect(clip=False, width=12).encode(
+    y=alt.value(0), # for some reason this works
+    y2=alt.value(-16),
+    yOffset=alt.value(-24),
+    color=alt.Color("dataset:N").scale(scheme="set2")
+  )
+```
+
+```{python}
+dendro_barplot = (
+  (chart_den + barplot + x_cycle_colors + x_method_colors)
+  .resolve_scale(x="shared", y="shared", color="independent")
+  .resolve_axis(y="independent")
+  .properties(width=400, height=150)
+)
+dendro_barplot.show()
+```
+
+
 ### Correlation Heatmap of UF samples {.unnumbered .unlisted}
 
 ```{python}
@@ -785,34 +897,23 @@ linkage_mat = linkage(corr_mat.T, method="complete", optimal_ordering=True)
 dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.query("dataset == 'HUT'").index, no_plot=True)
 dendro_marks_x = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
 dendro_coord = get_df_coord(dend_obj)
-cols_xk = ["xk1", "xk2", "xk3", "xk4"]
-cols_yk = ["yk1", "yk2", "yk3", "yk4"]
 
-# and transform the x and y coords to a suitable scale
-scaler = .2
-x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
-dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
-dendro_coord[cols_xk] *= (dendro_marks_x.shape[0] - 1)
-dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
-dendro_coord[cols_yk] += 1.18 # and shift up whole unit
-
-base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
+base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0)) 
 # the U shape is composed of a shoulder plus two arms, made with separate lines...
 shoulder = base.mark_rule().encode(
-    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dendro_marks_x)-1]),
+    x=alt.X("xk2:Q", title="").axis(None),
     x2=alt.X2("xk3:Q"),
     y=alt.Y("yk2:Q", title="").axis(None))
 arm1 = base.mark_rule().encode(
-    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_x)-1]),
-    y=alt.Y("yk1:Q").axis(None),
+    x=alt.X("xk1:Q"),
+    y=alt.Y("yk1:Q"),
     y2=alt.Y2("yk2:Q"))
 arm2 = base.mark_rule().encode(
-    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_x)-1]),
-    y=alt.Y("yk3:Q").axis(None),
+    x=alt.X("xk3:Q"),
+    y=alt.Y("yk3:Q"),
     y2=alt.Y2("yk4:Q"))
 
-# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
-chart_den_x = shoulder + arm1 + arm2
+chart_den_x = (shoulder + arm1 + arm2).properties(height=50, width=160)
 ```
 
 Generate the Y axis linkage plots.
@@ -824,31 +925,22 @@ dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.query("dataset == 'Vigan
 dendro_marks_y = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
 dendro_coord = get_df_coord(dend_obj)
 
-# and transform the x and y coords to a suitable scale
-scaler = .20
-x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
-dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
-dendro_coord[cols_xk] *= (dendro_marks_y.shape[0] - 1)
-dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
-dendro_coord[cols_yk] += 1.18 # and shift up whole unit
-
 base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
 # the U shape is composed of a shoulder plus two arms, made with separate lines...
 shoulder = base.mark_rule().encode(
-    y=alt.Y("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dendro_marks_y)-1]),
+    y=alt.Y("xk2:Q", title="").axis(None),
     y2=alt.Y2("xk3:Q"),
     x=alt.X("yk2:Q", title="").axis(None).scale(reverse=True))
 arm1 = base.mark_rule().encode(
-    y=alt.Y("xk1:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_y)-1]),
-    x=alt.X("yk1:Q").axis(None).scale(reverse=True),
+    y=alt.Y("xk1:Q"),
+    x=alt.X("yk1:Q").scale(reverse=True),
     x2=alt.X2("yk2:Q"))
 arm2 = base.mark_rule().encode(
-    y=alt.Y("xk3:Q").axis(grid=False).scale(domain=[0,len(dendro_marks_y)-1]),
-    x=alt.X("yk3:Q").axis(None).scale(reverse=True),
+    y=alt.Y("xk3:Q"),
+    x=alt.X("yk3:Q").scale(reverse=True),
     x2=alt.X2("yk4:Q"))
 
-# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
-chart_den_y = shoulder + arm1 + arm2
+chart_den_y = (shoulder + arm1 + arm2).properties(width=50, height=500)
 ```
 
 ```{python}
@@ -861,27 +953,73 @@ base_heatmap = alt.Chart(corr_long).mark_rect().encode(
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
-  x=alt.X('x_vars:O', sort=dendro_marks_x, title=None), # Nominal for categorical x-axis
+  x=alt.X('x_vars:O', sort=dendro_marks_x.labels, title=None), # Nominal for categorical x-axis
   color=alt.Color("cyclephase:N"),
   xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 y_group_colors = base_heatmap.mark_rect().encode(
-  y=alt.Y('y_vars:O', sort=dendro_marks_y, title=None), # Nominal for categorical x-axis
+  y=alt.Y('y_vars:O', sort=dendro_marks_y.labels, title=None), # Nominal for categorical x-axis
   color=alt.Color("cyclephase_y:N").legend(None),
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 # Layer heatmap and colors
-final_chart = (x_group_colors + y_group_colors + base_heatmap).resolve_scale(
-  x='shared', y='shared', color='shared'
-)
+final_chart = (x_group_colors + y_group_colors + base_heatmap)
 
 # Display the chart
 final_chart
 ```
 
 ```{python}
-dendro_corrplot = (final_chart + chart_den_x + chart_den_y).resolve_scale(x="shared", y="shared", color="independent").resolve_axis(y="independent").properties(width=200, height=500)
+dendro_corrplot = (
+  (chart_den_y | chart_den_x & final_chart)
+  .resolve_scale(x="independent", y="independent")
+  .resolve_axis(x="independent", y="independent")
+)
+
 dendro_corrplot.show()
 ```
+
+### PCA of UF Vigano and HUT samples
+
+```{python}
+
+# PCA calculation
+pca = PCA(n_components=2)
+pca_df = (
+  pd.DataFrame(data=pca.fit_transform(fractions_df), columns=["PC1", "PC2"])
+  .set_index(fractions_df.index)
+  .merge(phenotype_df, left_index=True, right_index=True)
+)
+expl_var = pca.explained_variance_ratio_
+
+# --- Create the base scatter plot ---
+scatter = alt.Chart(pca_df).mark_point(
+  size=40, filled=True
+).encode(
+  x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
+  y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
+  color=alt.Color("cyclephase:N", title=legend_title) if color_field else "black",
+  shape=alt.Shape("dataset:N") if style_field else "circle"
+)
+
+```
+
+:::
+
+```{python}
+(
+  dendro_corrplot | biplot & dendro_barplot
+).resolve_scale(x="independent")
+```
+
+## FIG 5: Spatial Projections
+
+::: {.panel-tabset}
+
+### Select a tab: {.unnumbered .unlisted}
+
+### Example of a ST field
+
+:::

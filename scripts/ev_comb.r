@@ -62,7 +62,7 @@ comb_pheno <-
   filter(samplename %in% colnames(comb_mat)) %>%
   arrange(match(samplename, colnames(comb_mat)[-1]))
 
-comb_pheno_uf <- comb_pheno %>% filter(group == "UF") %>% select(-grou)
+comb_pheno_uf <- comb_pheno %>% filter(group == "UF")
 
 
 # apply batch normalisation on the dataframes
@@ -90,8 +90,14 @@ comb_batch_uf <-
 
 
 #### write the expresiion matrix and the phenotype data out
-write_feather(comb_batch_all, paste0(data_folder, "/combined/comb_all_batch.feather"))
-write_feather(comb_batch_uf, paste0(data_folder, "/combined/comb_uf_batch.feather"))
-write_feather(comb_mat, paste0(data_folder, "/combined/comb_all_raw.feather"))
+write_feather(
+  comb_batch_all, paste0(data_folder, "/combined/comb_all_batch.feather")
+)
+write_feather(
+  comb_batch_uf, paste0(data_folder, "/combined/comb_uf_batch.feather")
+)
+write_feather(
+  comb_mat, paste0(data_folder, "/combined/comb_all_raw.feather")
+)
 write_tsv(comb_pheno_uf, paste0(data_folder, "/combined/comb_uf_pheno.tsv"))
 write_tsv(comb_pheno, paste0(data_folder, "/combined/comb_all_pheno.tsv"))

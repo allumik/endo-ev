@@ -52,7 +52,7 @@ try: from analysis.helpers.deconvo_functions import *
 except ImportError: from helpers.deconvo_functions import *
 
 ## Do you want to rerun all the models?
-rerun_all = False
+rerun_all = True
 
 ## load the environment variables from the .env file
 load_dotenv() 
@@ -174,10 +174,12 @@ Load in the bulk data from the EV and biopsy samples
 ```{python}
 
 ## load in the EV data
-comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather").set_index("gene_id").iloc[:-1]
+comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather").set_index("gene_id").iloc[:-1]
+comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather").set_index("external_gene_name").iloc[:-1]
 comb_uf = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather").set_index("gene_id").iloc[:-1]
 ## filter out some samples
 terminator = ["HUT26_UF", "HUT26_biopsy"]
+comb_all = comb_all.drop(columns=terminator)
 comb_all_raw = comb_all_raw.drop(columns=terminator)
 comb_all_pheno = (
   pd.read_table(Path(data_folder).expanduser() / "combined" / "comb_all_pheno.tsv")
@@ -270,10 +272,27 @@ frac_params = {
 
 ## All samples
 
+Run it for the batch-corrected samples and also for the raw counts, but later on analyse only the batch-corrected samples.
+
 ```{python}
 
 fractions_folder = Path(data_folder) / "tape_fractions"
+
+## process the batch corrected counts
 fractions_file = fractions_folder / "comb_fracs.tsv"
+if fractions_file.expanduser().exists() and not rerun_all:
+  frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
+else:
+  model_obj = ov.bulk2single.Bulk2Single(
+    bulk_data=comb_all,
+    single_data=sc_dat,
+    **model_params
+  )
+  frac_pred = model_obj.predicted_fraction(**frac_params)
+  frac_pred.to_csv(fractions_file, sep="\t")
+
+## process the combined raw counts
+fractions_file = fractions_folder / "comb_fracs_raw.tsv"
 if fractions_file.expanduser().exists() and not rerun_all:
   frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
 else:
@@ -284,6 +303,14 @@ else:
   )
   frac_pred = model_obj.predicted_fraction(**frac_params)
   frac_pred.to_csv(fractions_file, sep="\t")
+
+general_cells = (
+  sc_dat.obs
+  .loc[:, ["lineage", "celltype"]]
+  .drop_duplicates("celltype")
+  .set_index("celltype", drop=True)
+  .reindex(frac_pred.columns.values)
+)
 
 ```
 
@@ -458,13 +485,6 @@ else:
   frac_tmp = model_obj.predicted_fraction(**frac_params)
   frac_tmp.to_csv(fractions_file, sep="\t")
 
-general_cells = (
-  sc_dat.obs
-  .loc[:, ["lineage", "celltype"]]
-  .drop_duplicates("celltype")
-  .set_index("celltype", drop=True)
-  .reindex(frac_tmp.columns.values)
-)
 ```
 
 ```{python}
@@ -754,14 +774,6 @@ else:
   )
   frac_pred = model_obj.predicted_fraction(**frac_params)
   frac_pred.to_csv(fractions_file, sep = "\t")
-
-general_cells = (
-  sc_dat.obs
-  .loc[:, ["lineage", "celltype"]]
-  .drop_duplicates("celltype")
-  .set_index("celltype", drop=True)
-  .reindex(frac_pred.columns.values)
-)
 
 # save it for later
 ccht_pred = frac_pred.copy()
