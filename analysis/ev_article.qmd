@@ -56,12 +56,14 @@ raw_data_folder = getenv("RAW_DATA_FOLDER")
 # some other dataset locations
 snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
 ccht_data_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw.feather"
+comb_data_loc = Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather"
+comb_raw_data_loc = Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather"
 ccht_pheno_loc = Path(data_folder).expanduser() / "filtered" / "phenotype.tsv"
 comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_all_pheno.tsv"
 fractions_folder = Path(data_folder) / "tape_fractions"
 fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
 fractions_file_loc_comb = fractions_folder / "comb_uf_fracs.tsv"
-fractions_file_loc_comb = fractions_folder / "comb_fracs_raw.tsv"
+fractions_file_loc_comb_raw = fractions_folder / "comb_fracs_raw.tsv"
 ```
 
 Load in the datasets:
@@ -91,10 +93,15 @@ ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator and samplenam
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
 
 ## load in the EV combined dataset phenotype for the fractions
-comb_uf_pheno = (
+comb_batch = pd.read_feather(comb_data_loc).set_index("gene_id").drop(columns=terminator)
+comb_raw = pd.read_feather(comb_raw_data_loc).set_index("external_gene_name").drop(columns=terminator)
+comb_all_pheno = (
   pd.read_table(comb_pheno_loc)
   .set_index("samplename")
   .query("samplename not in @terminator")
+)
+comb_uf_pheno = (
+  comb_all_pheno
   .assign(dataset = lambda x: np.where(x.dataset == "HUT", x.dataset, "Vigano"))
   .query("cyclephase in ['rec', 'pre'] and group == 'UF'")
 )
@@ -102,7 +109,7 @@ comb_uf_pheno = (
 ## load in the fractions predicted by the latest trained model
 frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
 frac_comb = pd.read_table(fractions_file_loc_comb, sep="\t", index_col=0)
-frac_comb_raw = pd.read_table(fractions_file_loc_comb, sep="\t", index_col=0)
+frac_comb_raw = pd.read_table(fractions_file_loc_comb_raw, sep="\t", index_col=0)
 
 general_cells = ( # associate celltypes with the lineage information in the sc_dat.obs
   sc_dat.obs
@@ -729,6 +736,7 @@ Here we transform the
 avg_uf = frac_pred.loc[prepped_pheno.query("group == 'UF'").index,].agg("mean")
 avg_bio = frac_pred.loc[prepped_pheno.query("group == 'biopsy'").index,].agg("mean")
 diff_df = pd.DataFrame({"diff": avg_uf - avg_bio}).join(ccht_comp_stat).rename(columns={"p-val": "pval"})
+threshold_p = .05 / len(ccht_comp_stat.index)
 
 ## base plot
 volcano_base = alt.Chart(
@@ -738,19 +746,19 @@ volcano_base = alt.Chart(
 ).encode(
   x=alt.X("diff:Q").scale(domain=[-.12, .12]).axis(title="difference", tickCount=4),
   y=alt.Y("pval:Q").scale(type="log", base=10, reverse=True).axis(title="p-value", tickCount=8),
-  color=alt.condition(alt.datum.pval < 0.05, alt.value("red"), alt.value("grey"))
+  color=alt.condition(alt.datum.pval < threshold_p, alt.value("red"), alt.value("grey"))
 )
 
 ## the text for the top two diff celltypes
 volcano_annot = alt.Chart(
-  diff_df.reset_index().sort_values("pval").head(5).assign(text_angle=lambda x: np.where(x["diff"] < 0, 330, 30))
+  diff_df.reset_index().sort_values("pval").head(4).assign(text_angle=lambda x: np.where(x["diff"] < 0, 330, 30))
 ).mark_text(align="center", dy=-8, angle=alt.expr(alt.datum.text_angle)).encode(
   x=alt.X("diff:Q"), y=alt.Y("pval:Q"),
   text=alt.Text("celltype:N")
 )
 
 ## the dividing line
-rule_tmp = pd.DataFrame({"threshold_p": [ .05 ]})
+rule_tmp = pd.DataFrame({"threshold_p": [ threshold_p ]})
 rule_y = alt.Chart(rule_tmp).mark_rule(color='black', strokeDash=[3,3]).encode(y="threshold_p")
 volcano = volcano_base + volcano_annot + rule_y
 volcano
@@ -843,13 +851,13 @@ barplot = base_bar.mark_bar(
   )
 
 # add the color groupings 
-x_cycle_colors = barplot.mark_rect(clip=False, width=12).encode(
+x_cycle_colors = barplot.mark_rect(clip=False, width=14).encode(
     y=alt.value(0), # for some reason this works
     y2=alt.value(-4),
     yOffset=alt.value(-12),
     color=alt.Color("cyclephase:N").scale(scheme="set1")
   )
-x_method_colors = barplot.mark_rect(clip=False, width=12).encode(
+x_method_colors = barplot.mark_rect(clip=False, width=14).encode(
     y=alt.value(0), # for some reason this works
     y2=alt.value(-16),
     yOffset=alt.value(-24),
@@ -858,13 +866,13 @@ x_method_colors = barplot.mark_rect(clip=False, width=12).encode(
 ```
 
 ```{python}
-dendro_barplot = (
+dendro_bar = (
   (chart_den + barplot + x_cycle_colors + x_method_colors)
   .resolve_scale(x="shared", y="shared", color="independent")
   .resolve_axis(y="independent")
-  .properties(width=400, height=150)
+  .properties(width=500, height=150)
 )
-dendro_barplot.show()
+dendro_bar.show()
 ```
 
 
@@ -913,7 +921,7 @@ arm2 = base.mark_rule().encode(
     y=alt.Y("yk3:Q"),
     y2=alt.Y2("yk4:Q"))
 
-chart_den_x = (shoulder + arm1 + arm2).properties(height=50, width=160)
+chart_den_x = (shoulder + arm1 + arm2).properties(height=50, width=200)
 ```
 
 Generate the Y axis linkage plots.
@@ -940,7 +948,7 @@ arm2 = base.mark_rule().encode(
     x=alt.X("yk3:Q").scale(reverse=True),
     x2=alt.X2("yk4:Q"))
 
-chart_den_y = (shoulder + arm1 + arm2).properties(width=50, height=500)
+chart_den_y = (shoulder + arm1 + arm2).properties(width=50, height=600)
 ```
 
 ```{python}
@@ -965,7 +973,7 @@ y_group_colors = base_heatmap.mark_rect().encode(
 )
 
 # Layer heatmap and colors
-final_chart = (x_group_colors + y_group_colors + base_heatmap)
+final_chart = (x_group_colors + y_group_colors + base_heatmap).properties(width=150, height=600)
 
 # Display the chart
 final_chart
@@ -984,34 +992,117 @@ dendro_corrplot.show()
 ### PCA of UF Vigano and HUT samples
 
 ```{python}
-
+# some params for the pcas
+shape_range = ["diamond", "square"]
+dims = {"height": 200, "width": 200}
 # PCA calculation
 pca = PCA(n_components=2)
 pca_df = (
-  pd.DataFrame(data=pca.fit_transform(fractions_df), columns=["PC1", "PC2"])
-  .set_index(fractions_df.index)
-  .merge(phenotype_df, left_index=True, right_index=True)
+  pd.DataFrame(data=pca.fit_transform(frac_comb), columns=["PC1", "PC2"])
+  .set_index(frac_comb.index)
+  .merge(comb_uf_pheno, left_index=True, right_index=True)
 )
 expl_var = pca.explained_variance_ratio_
 
 # --- Create the base scatter plot ---
-scatter = alt.Chart(pca_df).mark_point(
+pca_one = alt.Chart(pca_df).mark_point(
   size=40, filled=True
 ).encode(
   x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
   y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-  color=alt.Color("cyclephase:N", title=legend_title) if color_field else "black",
-  shape=alt.Shape("dataset:N") if style_field else "circle"
-)
-
+  color=alt.Color("dataset:N"),
+  shape=alt.Shape("cyclephase:N").scale(range=shape_range)
+).properties(title="Deconvolution with batch correction", **dims)
+pca_one
 ```
+
+### PCA of UF combined without batch correction
+
+```{python}
+# filter out biopsy samples
+frac_tmp = frac_comb_raw.loc[~frac_comb_raw.index.str.contains("biopsy")]
+# PCA calculation
+pca = PCA(n_components=2)
+pca_df = (
+  pd.DataFrame(data=pca.fit_transform(frac_tmp), columns=["PC1", "PC2"])
+  .set_index(frac_tmp.index)
+  .merge(comb_uf_pheno, left_index=True, right_index=True)
+)
+expl_var = pca.explained_variance_ratio_
+
+# --- Create the base scatter plot ---
+pca_two = alt.Chart(pca_df).mark_point(
+  size=40, filled=True
+).encode(
+  x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
+  y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
+  color=alt.Color("dataset:N"),
+  shape=alt.Shape("cyclephase:N").scale(range=shape_range)
+).properties(title="Deconvolution without batch correction", **dims)
+pca_two
+```
+
+### PCA of raw counts of combined UF
+
+```{python}
+# filter out biopsy samples
+counts_tmp = comb_batch.T.loc[~comb_batch.T.index.str.contains("biopsy")]
+# PCA calculation
+pca = PCA(n_components=2)
+pca_df = (
+  pd.DataFrame(data=pca.fit_transform(counts_tmp), columns=["PC1", "PC2"])
+  .set_index(counts_tmp.index)
+  .merge(comb_uf_pheno, left_index=True, right_index=True)
+)
+expl_var = pca.explained_variance_ratio_
+
+# --- Create the base scatter plot ---
+pca_three = alt.Chart(pca_df).mark_point(
+  size=40, filled=True
+).encode(
+  x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
+  y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
+  color=alt.Color("dataset:N"),
+  shape=alt.Shape("cyclephase:N").scale(range=shape_range)
+).properties(title="Raw counts with batch correction", **dims)
+pca_three
+```
+
+### PCA of batch adjusted counts of combined UF
+
+```{python}
+# filter out biopsy samples
+counts_tmp = comb_raw.T.loc[~comb_raw.T.index.str.contains("biopsy")]
+# PCA calculation
+pca = PCA(n_components=2)
+pca_df = (
+  pd.DataFrame(data=pca.fit_transform(counts_tmp), columns=["PC1", "PC2"])
+  .set_index(counts_tmp.index)
+  .merge(comb_uf_pheno, left_index=True, right_index=True)
+)
+expl_var = pca.explained_variance_ratio_
+
+# --- Create the base scatter plot ---
+pca_four = alt.Chart(pca_df).mark_point(
+  size=40, filled=True
+).encode(
+  x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
+  y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
+  color=alt.Color("dataset:N"),
+  shape=alt.Shape("cyclephase:N").scale(range=shape_range)
+).properties(title="Raw counts without batch correction", **dims)
+pca_four
+```
+
 
 :::
 
 ```{python}
+pca_block = (pca_one & pca_two) | (pca_three & pca_four)
 (
-  dendro_corrplot | biplot & dendro_barplot
-).resolve_scale(x="independent")
+  (dendro_corrplot | pca_block & dendro_bar)
+  .resolve_scale(x="independent", y="independent", color="independent", shape="independent")
+)
 ```
 
 ## FIG 5: Spatial Projections

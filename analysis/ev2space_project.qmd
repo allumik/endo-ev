@@ -123,6 +123,8 @@ for vis_fold in slides_path.iterdir():
     vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
     vis_dats[slide_id] = vis_dat
 
+# set the exemplary sample to use for downstream tasks
+example_sample = "152807" # "E184-1_bottom"
 vis_keys = list(vis_dats.keys())
 
 ```
@@ -292,7 +294,7 @@ gen_ccht_bio = ov.pp.preprocess(gen_ccht_bio, mode="shiftlog|pearson", n_HVGs=20
 ov.pp.scale(gen_ccht_bio)
 ov.pp.pca(gen_ccht_bio, layer='scaled', n_pcs=50)
 
-gen_ccht_bio.obsm['X_pca']=gen_ccht_bio.obsm['scaled|original|X_pca']
+gen_ccht_bio.obsm['X_pca'] = gen_ccht_bio.obsm['scaled|original|X_pca']
 ov.pl.embedding(
   gen_ccht_bio,
   basis='X_pca',
@@ -309,7 +311,8 @@ ov.pp.neighbors(
 
 ov.pp.umap(gen_ccht_bio)
 
-ov.pl.embedding( gen_ccht_bio,
+ov.pl.embedding(
+  gen_ccht_bio,
   basis='X_umap',
   color='celltype',
   frameon='small'
@@ -332,13 +335,11 @@ ov.pl.embedding(
 And now use the generated pseudo-single-cell dataset and project it to the spatial transcriptomic slide.
 
 ```{python}
-
 sc.pl.spatial(
-  vis_dats["E184-1_bottom"].to_memory(),
+  vis_dats[example_sample].to_memory(),
   color=[None, "log1p_total_counts"],
   ncols=2
   )
-
 ```
 
 ## Tangram + cell2location
@@ -378,7 +379,7 @@ if gen_st_file.exists() and not rerun_all:
 else:
   model_obj = ov.space.Tangram(
     gen_ccht_ev.to_memory(),
-    vis_dats["E184-1_bottom"].to_memory(),
+    vis_dats[example_sample].to_memory(),
     clusters="celltype"
   )
   model_obj.train(mode="cells", num_epochs=500, device="cuda:0")
@@ -423,10 +424,9 @@ gen_ccht_bio = gen_ccht_bio[gen_ccht_bio.obs.query("celltype not in @gen_ccht_bi
 if gen_st_file.exists() and not rerun_all:
   vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 else:
-  sc_dat = sc_dat[sc_dat.obs.query(the_condition).index, :]
   model_obj = ov.space.Tangram(
     gen_ccht_bio.to_memory(),
-    vis_dats["E184-1_bottom"].to_memory(),
+    vis_dats[example_sample].to_memory(),
     clusters="celltype"
   )
   model_obj.train(mode="cells", num_epochs=500, device="cuda:0")
