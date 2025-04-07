@@ -42,7 +42,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Patch
 
 ## Do you want to rerun all the models?
-rerun_all = True
+rerun_all = False
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -461,5 +461,52 @@ plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
 ```
 
 :::
+
+## scRNA-seq data
+
+```{python}
+
+gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_ref.h5ad"
+if gen_st_file.exists() and not rerun_all:
+  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+else:
+  model_obj = ov.space.Tangram(
+    sc_dat.to_memory(),
+    vis_dats[example_sample].to_memory(),
+    clusters="celltype"
+  )
+  model_obj.train(mode="cells", num_epochs=500, device="cuda:0")
+  vis_dat_proj = model_obj.cell2location()
+  vis_dat_proj.write(gen_st_file)
+  del model_obj
+
+```
+
+Visualise the results
+
+::: {.panel-tabset}
+
+### Mesenchymal
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Mesenchymal")
+```
+
+### Endothelial
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Endothelial")
+```
+
+### Epithelial
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Epithelial")
+```
+
+### Immune
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
+```
+
+:::
+
 
 :::
