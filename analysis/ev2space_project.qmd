@@ -475,7 +475,7 @@ else:
     vis_dats[example_sample].to_memory(),
     clusters="celltype"
   )
-  model_obj.train(mode="cells", num_epochs=500, device="cuda:0")
+  model_obj.train(mode="cells", num_epochs=500, device="cpu")
   vis_dat_proj = model_obj.cell2location()
   vis_dat_proj.write(gen_st_file)
   del model_obj

@@ -25,10 +25,10 @@ Setup the environment and import dependencies.
 #| output: false
 
 import re
-import pandas as pd
-import scanpy as sc
-import anndata as an
 import numpy as np
+import pandas as pd
+import anndata as an
+import scanpy as sc
 import altair as alt
 from IPython.display import HTML
 from pathlib import Path
@@ -142,6 +142,24 @@ features_ev = (
   .query("samplename in @frac_pred.index")
   .set_index("samplename")
 )
+```
+
+The spatial slides with spatial deconvolution
+
+```{python}
+
+gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_ev.h5ad"
+vis_dat_ev = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_bio.h5ad"
+vis_dat_bio = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+# gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_sc.h5ad"
+# vis_dat_sc = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
+gen_ccht_ev = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
+gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+
 ```
 
 
@@ -1111,6 +1129,86 @@ pca_block = (pca_one & pca_two) | (pca_three & pca_four)
 
 ### Select a tab: {.unnumbered .unlisted}
 
+```{python}
+
+def preproc_sc(gen_sc):
+  gen_ccht_ev = ov.pp.preprocess(gen_sc, mode="shiftlog|pearson", n_HVGs=2000)
+  ov.pp.scale(gen_sc)
+  ov.pp.pca(gen_sc, layer='scaled', n_pcs=50)
+
+  gen_sc.obsm['X_pca']=gen_sc.obsm['scaled|original|X_pca']
+  ov.pl.embedding(
+    gen_sc,
+    basis='X_pca',
+    color='celltype',
+    frameon='small'
+  )
+
+  ov.pp.neighbors(
+    gen_sc,
+    n_neighbors=15,
+    n_pcs=50,
+    use_rep='scaled|original|X_pca'
+  )
+
+  ov.pp.umap(gen_sc)
+
+  ov.pl.embedding(
+    gen_sc,
+    basis='X_umap',
+    color='celltype',
+    frameon='small'
+  )
+
+  ov.pl.embedding(
+    gen_sc,
+    basis='X_umap',
+    color='lineage',
+    frameon='small'
+  )
+
+def plotter_spat(gen_data, vis_data, ct_group):
+  cts = ( # avoid some errors from celltypes having same name as genes
+    gen_data.obs
+    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
+    .celltype
+    .unique()
+  )
+  sc.pl.spatial(
+    vis_data,
+    cmap='magma',
+    color=cts,
+    ncols=3, size=1.3,
+    img_key='hires',
+    # limit color scale at 99% quantile of cell abundance
+    vmin=0, vmax='p95'
+  )
+
+```
+
 ### Example of a ST field
+
+```{python}
+
+def plotter_spat(gen_data, vis_data, ct_group):
+  cts = ( # avoid some errors from celltypes having same name as genes
+    gen_data.obs
+    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
+    .celltype
+    .unique()
+  )
+  sc.pl.spatial(
+    vis_data,
+    cmap='magma',
+    color=cts,
+    ncols=3, size=1.3,
+    img_key='hires',
+    # limit color scale at 99% quantile of cell abundance
+    vmin=0, vmax='p95'
+  )
+
+vis_dat_ev
+
+```
 
 :::
