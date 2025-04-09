@@ -428,15 +428,19 @@ def multiclass_spat(gen_data, vis_data, ct_group):
     .unique()
   )
   ## select the maximum enrichment value for the spot and plot it
-  vis_data.obs = vis_data.obs.assign(max_val = vis_data.obs.loc[:,cts].idxmax(axis=1))
+  vis_data.obs = vis_data.obs.assign(
+    max_key = vis_data.obs.loc[:,cts].idxmax(axis=1),
+    max_val = vis_data.obs.loc[:,cts].max(axis=1)
+    )
   sc.pl.spatial(
     vis_data,
     color="max_val",
-    size=.8,
+    size=1.1,
     alpha_img=.5,
     img_key='hires',
     # limit color scale at 99% quantile of cell abundance
-    vmin=0, vmax='p95'
+    vmin=0, vmax='p95',
+    alpha=.5
   )
 
 multiclass_spat(gen_ccht_ev, vis_dat_ev, "Epithelial")

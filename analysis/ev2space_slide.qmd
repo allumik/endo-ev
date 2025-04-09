@@ -1,0 +1,207 @@
+---
+title: "Single cell perspective into Extracellular Vesicules projected onto Spatial Transcriptomics"
+format:
+  html:
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+    self-contained-math: true
+jupyter: python3
+---
+
+
+## Tangram + cell2location
+
+Next, we try out the classical spatial deconvolution method `Tangram` to integrate the Visium slide and the generated scRNA-seq dataset. Then, we apply `cell2location` to perform spatial deconvoluion. The benefit of this approach is that it is less computationally heavy and we are not anymore limited by GPU VRAM, while being still performing on par with previous methods.
+
+```{python}
+# show the example slide sample
+sc.pl.spatial(
+  vis_dats[example_sample].to_memory(),
+  color=[None, "log1p_total_counts"],
+  ncols=2
+  )
+```
+
+```{python}
+
+def plotter_spat(gen_data, vis_data, ct_group):
+  cts = ( # avoid some errors from celltypes having same name as genes
+    gen_data.obs
+    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
+    .celltype
+    .unique()
+  )
+  sc.pl.spatial(
+    vis_data,
+    cmap='magma',
+    color=cts,
+    ncols=3, size=1.3,
+    img_key='hires',
+    # limit color scale at 99% quantile of cell abundance
+    vmin=0, vmax='p95'
+  )
+
+def multiclass_spat(gen_data, vis_data, ct_group):
+  cts = ( # avoid some errors from celltypes having same name as genes
+    gen_data.obs
+    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
+    .celltype
+    .unique()
+  )
+  ov.lp.plot_spatial(
+    vis_data,
+    cmap='magma',
+    color=cts,
+    ncols=3, size=1.3,
+    img_key='hires',
+    # limit color scale at 99% quantile of cell abundance
+    vmin=0, vmax='p95'
+  )
+
+```
+
+
+::: {.panel-tabset}
+
+## EV group
+
+```{python}
+
+gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_ev.h5ad"
+if gen_st_file.exists() and not rerun_all:
+  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+else:
+  model_obj = ov.space.Tangram(
+    gen_ccht_ev.to_memory(),
+    vis_dats[example_sample].to_memory(),
+    clusters="celltype"
+  )
+  model_obj.train(mode="cells", num_epochs=500, device="cpu")
+  vis_dat_proj = model_obj.cell2location()
+  vis_dat_proj.write(gen_st_file)
+  del model_obj
+
+```
+
+Visualise the results
+
+::: {.panel-tabset}
+
+### Mesenchymal 
+```{python}
+plotter_spat(gen_ccht_ev, vis_dat_proj, "Mesenchymal")
+```
+
+### Endothelial
+```{python}
+plotter_spat(gen_ccht_ev, vis_dat_proj, "Endothelial")
+```
+
+### Epithelial
+```{python}
+plotter_spat(gen_ccht_ev, vis_dat_proj, "Epithelial")
+```
+
+### Immune
+```{python}
+plotter_spat(gen_ccht_ev, vis_dat_proj, "Immune")
+```
+
+:::
+
+## Biopsy group
+
+```{python}
+
+gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_bio.h5ad"
+gen_ccht_bio = gen_ccht_bio[gen_ccht_bio.obs.query("celltype not in @gen_ccht_bio.var.index & celltype not in ['ILC3']").index, :]
+if gen_st_file.exists() and not rerun_all:
+  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+else:
+  model_obj = ov.space.Tangram(
+    gen_ccht_bio.to_memory(),
+    vis_dats[example_sample].to_memory(),
+    clusters="celltype"
+  )
+  model_obj.train(mode="cells", num_epochs=500, device="cpu")
+  vis_dat_proj = model_obj.cell2location()
+  vis_dat_proj.write(gen_st_file)
+  del model_obj
+
+```
+
+Visualise the results
+
+::: {.panel-tabset}
+
+### Mesenchymal
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Mesenchymal")
+```
+
+### Endothelial
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Endothelial")
+```
+
+### Epithelial
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Epithelial")
+```
+
+### Immune
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
+```
+
+:::
+
+## scRNA-seq data
+
+```{python}
+
+gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_ref.h5ad"
+if gen_st_file.exists() and not rerun_all:
+  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+else:
+  model_obj = ov.space.Tangram(
+    sc_dat.to_memory(),
+    vis_dats[example_sample].to_memory(),
+    clusters="celltype"
+  )
+  # do it on cpu as it gets too large for the gpu
+  model_obj.train(mode="cells", num_epochs=500, device="cpu")
+  vis_dat_proj = model_obj.cell2location()
+  vis_dat_proj.write(gen_st_file)
+  del model_obj
+
+```
+
+Visualise the results
+
+::: {.panel-tabset}
+
+### Mesenchymal
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Mesenchymal")
+```
+
+### Endothelial
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Endothelial")
+```
+
+### Epithelial
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Epithelial")
+```
+
+### Immune
+```{python}
+plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
+```
+
+:::
+
+:::
