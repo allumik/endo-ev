@@ -123,8 +123,6 @@ for vis_fold in slides_path.iterdir():
     vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
     vis_dats[slide_id] = vis_dat
 
-# set the exemplary sample to use for downstream tasks
-example_sample = "152807" # "E184-1_bottom"
 vis_keys = list(vis_dats.keys())
 
 ```
@@ -334,179 +332,114 @@ ov.pl.embedding(
 
 And now use the generated pseudo-single-cell dataset and project it to the spatial transcriptomic slide.
 
+First we will go with the early secretory stage samples
+
+::: {.panel-tabset}
+
 ```{python}
-sc.pl.spatial(
-  vis_dats[example_sample].to_memory(),
-  color=[None, "log1p_total_counts"],
-  ncols=2
-  )
+# set the exemplary sample to use for downstream tasks
+example_sample = "152807" # "E184-1_bottom"
 ```
 
-## Tangram + cell2location
+{{< include ev2space_slide.qmd >}}
 
-Next, we try out the classical spatial deconvolution method `Tangram` to integrate the Visium slide and the generated scRNA-seq dataset. Then, we apply `cell2location` to perform spatial deconvoluion. The benefit of this approach is that it is less computationally heavy and we are not anymore limited by GPU VRAM, while being still performing on par with previous methods.
+```{python}
+# set the exemplary sample to use for downstream tasks
+example_sample = "152811" # "E184-1_bottom"
+```
+
+{{< include ev2space_slide.qmd >}}
+
+:::
+
+Then let's also look at the proliferative stage samples
+
+::: {.panel-tabset}
+
+```{python}
+# set the exemplary sample to use for downstream tasks
+example_sample = "152806" # "E184-1_bottom"
+```
+
+{{< include ev2space_slide.qmd >}}
+
+```{python}
+# set the exemplary sample to use for downstream tasks
+example_sample = "152810" # "E184-1_bottom"
+```
+
+{{< include ev2space_slide.qmd >}}
+
+:::
+
+# Calculate summary statistics for the ST slides
+
+Here we try to quantify the difference in distances of different enrichment signatures. For this, we calculate the following statistics per slide:
+
+* Per cell type
+  * Correlation via `scipy.signal.correlate2d`
+  * Simple absolute difference of enrichment per spot
+  * Apply 2D filtering and then calculate the average distance to enrichment cluster on another projection
+* Per lineage
+  * Simple absolute difference of enrichment per spot
+  * Multicolor lineage plots
+
+For the filtering step we wish to remove any lowly enriched clusters so that only the more highly expressed features are left. This step is also applied before the multiclass plots so that the lowly enriched values wouldnt affect the other cell types. The lowly enriched region filtering is performed via a simple thresholding approach where the threshold is the lower quartile of the distribution over the slide for the cell type.
+
+In addition, we have subset some of the more niche celltypes that either don't exhibit a patterns in expression or are not related to the current cycle phase.
+
+For the following analysis, we will look at only the early secretory samples - 152807 and 152811.
 
 ```{python}
 
-def plotter_spat(gen_data, vis_data, ct_group):
+gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_ev.h5ad"
+vis_dat_ev = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_bio.h5ad"
+vis_dat_bio = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_ref.h5ad"
+vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+
+## create a subset of max 7 celltypes per larger lineage groups
+sub_ct = {
+  "Mesenchymal": ["eStromal", "dStromal_mid", "dStromal_early", "uSMCs", "mPV", "Fibroblast_basalis"],
+  "Epithelial": ["Luminal", "Ciliated", "Glandular", "Glandular_secretory", "preGlandular", "preLuminal", "preCiliated"]
+}
+
+```
+
+```{python}
+
+def multiclass_spat(gen_data, vis_data, ct_group):
   cts = ( # avoid some errors from celltypes having same name as genes
     gen_data.obs
     .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
     .celltype
     .unique()
   )
+  the_conditional = " \
+    (lineage=='Epithelial') &  \
+    celltype not in @vis_data.var.index & \
+    celltype in @vis_data.obs.columns \
+  "
+  cts = ( # avoid some errors from celltypes having same name as genes
+    gen_ccht_ev.obs
+    .query(the_conditional)
+    .celltype
+    .unique()
+  )
+  ## select the maximum enrichment value for the spot and plot it
+  vis_data.obs = vis_data.obs.assign(max_val = vis_data.obs.loc[:,cts].idxmax(axis=1))
   sc.pl.spatial(
     vis_data,
-    cmap='magma',
-    color=cts,
-    ncols=3, size=1.3,
+    color="max_val",
+    size=.8,
+    alpha_img=.5,
     img_key='hires',
     # limit color scale at 99% quantile of cell abundance
     vmin=0, vmax='p95'
   )
-  
-```
 
-::: {.panel-tabset}
-
-## EV group
-
-```{python}
-
-gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_ev.h5ad"
-if gen_st_file.exists() and not rerun_all:
-  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-else:
-  model_obj = ov.space.Tangram(
-    gen_ccht_ev.to_memory(),
-    vis_dats[example_sample].to_memory(),
-    clusters="celltype"
-  )
-  model_obj.train(mode="cells", num_epochs=500, device="cuda:0")
-  vis_dat_proj = model_obj.cell2location()
-  vis_dat_proj.write(gen_st_file)
-  del model_obj
+multiclass_spat(gen_ccht_ev, vis_dat_ev, "Epithelial")
 
 ```
 
-Visualise the results
-
-::: {.panel-tabset}
-
-### Mesenchymal 
-```{python}
-plotter_spat(gen_ccht_ev, vis_dat_proj, "Mesenchymal")
-```
-
-### Endothelial
-```{python}
-plotter_spat(gen_ccht_ev, vis_dat_proj, "Endothelial")
-```
-
-### Epithelial
-```{python}
-plotter_spat(gen_ccht_ev, vis_dat_proj, "Epithelial")
-```
-
-### Immune
-```{python}
-plotter_spat(gen_ccht_ev, vis_dat_proj, "Immune")
-```
-
-:::
-
-## Biopsy group
-
-```{python}
-
-gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_bio.h5ad"
-gen_ccht_bio = gen_ccht_bio[gen_ccht_bio.obs.query("celltype not in @gen_ccht_bio.var.index & celltype not in ['ILC3']").index, :]
-if gen_st_file.exists() and not rerun_all:
-  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-else:
-  model_obj = ov.space.Tangram(
-    gen_ccht_bio.to_memory(),
-    vis_dats[example_sample].to_memory(),
-    clusters="celltype"
-  )
-  model_obj.train(mode="cells", num_epochs=500, device="cuda:0")
-  vis_dat_proj = model_obj.cell2location()
-  vis_dat_proj.write(gen_st_file)
-  del model_obj
-
-```
-
-Visualise the results
-
-::: {.panel-tabset}
-
-### Mesenchymal
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Mesenchymal")
-```
-
-### Endothelial
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Endothelial")
-```
-
-### Epithelial
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Epithelial")
-```
-
-### Immune
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
-```
-
-:::
-
-## scRNA-seq data
-
-```{python}
-
-gen_st_file = Path(anndata_folder).expanduser() / "c2l_st_ref.h5ad"
-if gen_st_file.exists() and not rerun_all:
-  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-else:
-  model_obj = ov.space.Tangram(
-    sc_dat.to_memory(),
-    vis_dats[example_sample].to_memory(),
-    clusters="celltype"
-  )
-  model_obj.train(mode="cells", num_epochs=500, device="cpu")
-  vis_dat_proj = model_obj.cell2location()
-  vis_dat_proj.write(gen_st_file)
-  del model_obj
-
-```
-
-Visualise the results
-
-::: {.panel-tabset}
-
-### Mesenchymal
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Mesenchymal")
-```
-
-### Endothelial
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Endothelial")
-```
-
-### Epithelial
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Epithelial")
-```
-
-### Immune
-```{python}
-plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
-```
-
-:::
-
-
-:::
