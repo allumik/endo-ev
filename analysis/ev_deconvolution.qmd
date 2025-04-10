@@ -19,13 +19,10 @@ Set up the environment and load the deps:
 import re
 import pandas as pd
 import scanpy as sc
-import omicverse as ov
 import anndata as an
 import numpy as np
 import seaborn as sns
 import altair as alt
-import plotly.express as px
-import dash_bio
 import seaborn.objects as so
 import matplotlib.pyplot as plt
 from IPython.display import HTML
@@ -64,28 +61,6 @@ atlas_folder = getenv("ATLAS_FOLDER")
 data_folder = getenv("DATA_FOLDER")
 raw_data_folder = getenv("RAW_DATA_FOLDER")
 
-# some prelims for data standardisation
-replace_dict = {
-  "Proliferative Early": "EP",
-  "Proliferative Late": "LP",
-  "Proliferative": "LP",
-  "Secretory Early": "ES",
-  "Secretory Mid": "MS",
-  "Secretory Late": "LS",
-  "Secretory Early-Mid": "MS",
-  # "Secretory": "Secretory Mid",
-  "Mid-Secretory": "MS",
-  "Proliferative Disordered": "EP"
-}
-
-replace_immu = {
-  "Lymphatic": ["uNK1", "uNK1_cycling", "uNK2", "uNK3", "ILC3", "Peripheral_lymphocyte", "Lymphatic", "Immune_Lymphoid"],
-  "Myeloid": ["eM1", "eM2", "cDC1", "cDC2", "pDC", "Monocyte", "Immune_Myeloid"],
-  "B-cells": ["B_cell", "Plasma_B_cell"],
-  "T-cells": ["T_Reg", "T_cell_CD8", "T_cell_CD4", "T_cell_cycling"]
-}
-inv_replace_immu = {value: key for key, values in replace_immu.items() for value in values}
-
 cyclephase_to_include = ["LS", "LP", "EP", "ES", "MS", "Menstrual"]
 
 ```
@@ -97,81 +72,18 @@ Preprocessing for the HECA dataset:
 3) filter out "Hormones" celltypes and endometriotic samples 
 4) do some preprocessing
 
-```{python}
-#| output: false
-
-snapshot_an_loc = Path(data_folder) / "sc_deconv_snapshot.h5ad"
-if not snapshot_an_loc.exists():
-  ## Load the main HECA dataset if not already formatted
-  sc_dat = sc.read_h5ad(
-    Path(raw_data_folder).expanduser() / "endometriumAtlasV2_cells_with_counts.h5ad",
-    backed = "r"
-  )
-
-  sc_dat_immu = sc.read_h5ad(
-    Path(raw_data_folder).expanduser() / "endometriumAtlasV2_cells_immune.h5ad",
-    backed = "r"
-  )
-
-  sc_dat.obs = (
-    sc_dat.obs
-    .assign(
-      cyclephase=lambda x: x.Stage.replace(replace_dict).astype("category"),
-      celltype=lambda x: 
-        x.celltype
-        .astype("object")
-        .mask(
-          x.index.isin(sc_dat_immu.obs.celltype.index), 
-          sc_dat_immu.obs.celltype.astype("object")
-        ),
-      label_long=lambda x:
-        x.label_long
-        .astype("object")
-        .mask(
-          x.index.isin(sc_dat_immu.obs.label_long.index), 
-          sc_dat_immu.obs.label_long.astype("object")
-        )
-        .astype("category")
-    )
-    .rename(columns={"sample": "samplename"})
-    # now generalise the cell types for better deconvolution classes
-    .assign(celltype=lambda x: x.celltype.replace(inv_replace_immu).astype("category"))
-  )
-
-  del sc_dat_immu
-
-  ## also exclude the endometriosis samples
-  the_condition = "(celltype not in @sc_dat.var.index) & (Endometrial_pathology == 'C') & (cyclephase in @cyclephase_to_include)"
-  sc_dat = sc_dat[sc_dat.obs.query(the_condition).index, :].to_memory()
-
-  ## exclude some celltypes, such as she hormones cell types and poorly represented samples
-  count_tmp = sc_dat.obs.celltype.value_counts()
-  no_go_celltype = list(count_tmp[count_tmp < 100].index) + ['eHormones', 'sHormones', 'dHormones']
-  sc_dat = sc_dat[sc_dat.obs.query("celltype not in @no_go_celltype").index, :]
-
-  sc_dat = ov.pp.preprocess(sc_dat.to_memory(), mode="pearson|pearson", n_HVGs=3000)
-
-  ## switch the expression matrix to raw counts if the matrix is preprocessed
-  sc_dat.layers["scaled"] = sc_dat.X
-  sc_dat.X = sc_dat.layers["counts"]
-  del sc_dat.layers["counts"]
-
-  # save the processed dataset
-  sc_dat.write(snapshot_an_loc)
-else:
-  sc_dat = an.read_h5ad(snapshot_an_loc)
-
-# sc_dat = sc_dat[:, sc_dat.var.highly_variable_features]
-# check the minimum size of celltype matrix after filtering
-# np.min([sc_dat.obs.groupby(["Stage", "celltype"]).apply(lambda x: sc_dat[x.index, :].X.size)])
-
-```
-
 We also excluded celltypes that have less than 100 cells represented.
 
 Load in the bulk data from the EV and biopsy samples
 
 ```{python}
+#| output: false
+
+snapshot_an_loc = Path(data_folder) / "sc_deconv_snapshot.h5ad"
+sc_dat = an.read_h5ad(snapshot_an_loc)
+# sc_dat = sc_dat[:, sc_dat.var.highly_variable_features]
+# check the minimum size of celltype matrix after filtering
+# np.min([sc_dat.obs.groupby(["Stage", "celltype"]).apply(lambda x: sc_dat[x.index, :].X.size)])
 
 ## load in the EV data
 comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather").set_index("gene_id").iloc[:-1]
@@ -280,29 +192,11 @@ fractions_folder = Path(data_folder) / "tape_fractions"
 
 ## process the batch corrected counts
 fractions_file = fractions_folder / "comb_fracs.tsv"
-if fractions_file.expanduser().exists() and not rerun_all:
-  frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=comb_all,
-    single_data=sc_dat,
-    **model_params
-  )
-  frac_pred = model_obj.predicted_fraction(**frac_params)
-  frac_pred.to_csv(fractions_file, sep="\t")
+frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
 
 ## process the combined raw counts
 fractions_file = fractions_folder / "comb_fracs_raw.tsv"
-if fractions_file.expanduser().exists() and not rerun_all:
-  frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=comb_all_raw,
-    single_data=sc_dat,
-    **model_params
-  )
-  frac_pred = model_obj.predicted_fraction(**frac_params)
-  frac_pred.to_csv(fractions_file, sep="\t")
+frac_raw = pd.read_table(fractions_file, sep="\t", index_col=0)
 
 general_cells = (
   sc_dat.obs
@@ -474,16 +368,7 @@ As the proportions add up to one, we can also generate a stacked barplot for the
 ```{python}
 # subset only uf samples
 fractions_file = fractions_folder / "comb_uf_fracs.tsv"
-if fractions_file.expanduser().exists() and not rerun_all:
-  frac_tmp = pd.read_table(fractions_file, sep="\t", index_col=0)
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=comb_uf,
-    single_data=sc_dat,
-    **model_params
-  )
-  frac_tmp = model_obj.predicted_fraction(**frac_params)
-  frac_tmp.to_csv(fractions_file, sep="\t")
+frac_tmp = pd.read_table(fractions_file, sep="\t", index_col=0)
 
 ```
 
@@ -764,16 +649,7 @@ This dataset has only CCHT samples without batch correction. These also include 
 ```{python}
 
 fractions_file = fractions_folder / "ccht_fracs.tsv"
-if fractions_file.expanduser().exists() and not rerun_all:
-  frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=ccht_uf_raw,
-    single_data=sc_dat,
-    **model_params
-  )
-  frac_pred = model_obj.predicted_fraction(**frac_params)
-  frac_pred.to_csv(fractions_file, sep = "\t")
+frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
 
 # save it for later
 ccht_pred = frac_pred.copy()
@@ -1160,16 +1036,7 @@ res_join.to_excel(fractions_folder / "ccht_bio.xlsx", sheet_name="ccht_bio")
 ```{python}
 
 fractions_file = fractions_folder / "scratch_fracs.tsv"
-if fractions_file.expanduser().exists() and not rerun_all:
-  frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=scratch_mat,
-    single_data=sc_dat,
-    **model_params
-  )
-  frac_pred = model_obj.predicted_fraction(**frac_params)
-  frac_pred.to_csv(fractions_file, sep = "\t")
+frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
 
 general_cells = (
   sc_dat.obs
@@ -1309,16 +1176,7 @@ ttest_table.to_excel(fractions_folder / "scratch_test.xlsx", sheet_name="scratch
 ```{python}
 
 fractions_file = fractions_folder / "clin_fracs.tsv"
-if fractions_file.expanduser().exists() and not rerun_all:
-  frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=clin_uf_raw,
-    single_data=sc_dat,
-    **model_params
-  )
-  frac_pred = model_obj.predicted_fraction(**frac_params)
-  frac_pred.to_csv(fractions_file, sep = "\t")
+frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
 
 general_cells = (
   sc_dat.obs
@@ -1533,15 +1391,16 @@ row_colors = mah_means.reindex(
   mah_means.index.values
   ).implantation.astype("object").map(lut)
 
+## not using dash_bio and plotly anymore
 # subset only uf samples
-dash_bio.Clustergram(
-  data=mah_means.drop(columns=["implantation"]),
-  column_labels=list(mah_means.drop(columns=["implantation"]).columns.values),
-  row_labels=list(mah_means.index),
-  row_colors=list(row_colors),
-  height=900,
-  width=600
-)
+# dash_bio.Clustergram(
+#   data=mah_means.drop(columns=["implantation"]),
+#   column_labels=list(mah_means.drop(columns=["implantation"]).columns.values),
+#   row_labels=list(mah_means.index),
+#   row_colors=list(row_colors),
+#   height=900,
+#   width=600
+# )
 
 ```
 
@@ -1638,14 +1497,14 @@ row_colors = mah_means.reindex(
   ).status_rif.astype("object").map(lut)
 
 # subset only uf samples
-dash_bio.Clustergram(
-  data=mah_means.drop(columns=["status_rif"]),
-  column_labels=list(mah_means.drop(columns=["status_rif"]).columns.values),
-  row_labels=list(mah_means.index),
-  row_colors=list(row_colors),
-  height=900,
-  width=600
-)
+# dash_bio.Clustergram(
+#   data=mah_means.drop(columns=["status_rif"]),
+#   column_labels=list(mah_means.drop(columns=["status_rif"]).columns.values),
+#   row_labels=list(mah_means.index),
+#   row_colors=list(row_colors),
+#   height=900,
+#   width=600
+# )
 
 ```
 
@@ -1742,14 +1601,14 @@ row_colors = mah_means.reindex(
   ).implantation.astype("object").map(lut)
 
 # subset only uf samples
-dash_bio.Clustergram(
-  data=mah_means.drop(columns=["implantation"]),
-  column_labels=list(mah_means.drop(columns=["implantation"]).columns.values),
-  row_labels=list(mah_means.index),
-  row_colors=list(row_colors),
-  height=900,
-  width=600
-)
+# dash_bio.Clustergram(
+#   data=mah_means.drop(columns=["implantation"]),
+#   column_labels=list(mah_means.drop(columns=["implantation"]).columns.values),
+#   row_labels=list(mah_means.index),
+#   row_colors=list(row_colors),
+#   height=900,
+#   width=600
+# )
 
 ```
 

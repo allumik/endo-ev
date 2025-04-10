@@ -1,0 +1,28 @@
+name: endo_ev_r
+channels:
+  - conda-forge
+  - bioconda
+  - r
+dependencies:
+  # R deps
+  - r-base>=4.1 # this version for the pipes
+  - r-tidyverse
+  - r-tidymodels
+  - r-dotenv
+  - r-jsonlite
+  - r-languageserver
+  - r-rmarkdown
+  - r-stringr
+  - r-foreach
+  - r-doparallel
+  - r-readxl
+  - r-feather
+  - r-glue
+  - r-biomartr
+  - r-statmod
+  - bioconductor-rtracklayer
+  - bioconductor-sva
+  - bioconductor-edger
+  - bioconductor-deseq2
+  - bioconductor-limma
+

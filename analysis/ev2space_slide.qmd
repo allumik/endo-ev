@@ -69,18 +69,7 @@ def multiclass_spat(gen_data, vis_data, ct_group):
 ```{python}
 
 gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_ev.h5ad"
-if gen_st_file.exists() and not rerun_all:
-  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-else:
-  model_obj = ov.space.Tangram(
-    gen_ccht_ev.to_memory(),
-    vis_dats[example_sample].to_memory(),
-    clusters="celltype"
-  )
-  model_obj.train(mode="cells", num_epochs=500, device="cpu")
-  vis_dat_proj = model_obj.cell2location()
-  vis_dat_proj.write(gen_st_file)
-  del model_obj
+vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 
 ```
 
@@ -116,18 +105,7 @@ plotter_spat(gen_ccht_ev, vis_dat_proj, "Immune")
 
 gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_bio.h5ad"
 gen_ccht_bio = gen_ccht_bio[gen_ccht_bio.obs.query("celltype not in @gen_ccht_bio.var.index & celltype not in ['ILC3']").index, :]
-if gen_st_file.exists() and not rerun_all:
-  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-else:
-  model_obj = ov.space.Tangram(
-    gen_ccht_bio.to_memory(),
-    vis_dats[example_sample].to_memory(),
-    clusters="celltype"
-  )
-  model_obj.train(mode="cells", num_epochs=500, device="cpu")
-  vis_dat_proj = model_obj.cell2location()
-  vis_dat_proj.write(gen_st_file)
-  del model_obj
+vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 
 ```
 
@@ -162,19 +140,7 @@ plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
 ```{python}
 
 gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_ref.h5ad"
-if gen_st_file.exists() and not rerun_all:
-  vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-else:
-  model_obj = ov.space.Tangram(
-    sc_dat.to_memory(),
-    vis_dats[example_sample].to_memory(),
-    clusters="celltype"
-  )
-  # do it on cpu as it gets too large for the gpu
-  model_obj.train(mode="cells", num_epochs=500, device="cpu")
-  vis_dat_proj = model_obj.cell2location()
-  vis_dat_proj.write(gen_st_file)
-  del model_obj
+vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 
 ```
 

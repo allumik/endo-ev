@@ -20,11 +20,10 @@ import re
 import pandas as pd
 pd.set_option('display.max_columns', 100)
 import scanpy as sc
-import omicverse as ov
+import squidpy as sq
 import anndata as an
 import numpy as np
 import seaborn as sns
-import plotly.express as px
 import seaborn.objects as so
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -41,8 +40,6 @@ from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Patch
 
-## Do you want to rerun all the models?
-rerun_all = False
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -55,28 +52,6 @@ data_folder = getenv("DATA_FOLDER")
 st_folder = getenv("ST_FOLDER")
 model_folder = Path(data_folder).expanduser() / "saved_models"
 raw_data_folder = getenv("RAW_DATA_FOLDER")
-
-
-# some prelims for data standardisation
-replace_dict = {
-  "Proliferative Early": "EP",
-  "Proliferative Late": "LP",
-  "Secretory Early": "ES",
-  "Secretory Mid": "MS",
-  "Secretory Late": "LS",
-  "Secretory Early-Mid": "MS",
-  # "Secretory": "Secretory Mid",
-  "Mid-Secretory": "MS",
-  "Proliferative Disordered": "EP"
-}
-
-replace_immu = {
-  "Lymphatic": ["uNK1", "uNK1_cycling", "uNK2", "uNK3", "ILC3", "Peripheral_lymphocyte", "Lymphatic", "Immune_Lymphoid"],
-  "Myeloid": ["eM1", "eM2", "cDC1", "cDC2", "pDC", "Monocyte", "Immune_Myeloid"],
-  "B-cells": ["B_cell", "Plasma_B_cell"],
-  "T-cells": ["T_Reg", "T_cell_CD8", "T_cell_CD4", "T_cell_cycling"]
-}
-inv_replace_immu = {value: key for key, values in replace_immu.items() for value in values}
 
 ```
 
@@ -108,19 +83,7 @@ vis_dats = {}
 for vis_fold in slides_path.iterdir():
   if vis_fold.is_dir():
     slide_id = vis_fold.stem
-    print("Working on slide " + str(slide_id))
-    vis_dat = sc.read_visium(path=vis_fold) # for vento data
-    # vis_dat = sc.read_visium(path=vis_fold / "outs") # for inhouse data
-    vis_dat.var_names_make_unique()
-    vis_dat.var["mt"] = vis_dat.var_names.str.startswith("MT-")
-    sc.pp.calculate_qc_metrics(vis_dat, qc_vars=["mt"], inplace=True)
-
-    vis_dat = vis_dat[:, vis_dat.var['total_counts'] > 100]
-    vis_dat = ov.pp.preprocess(vis_dat, mode='shiftlog|pearson', n_HVGs=3000, target_sum=1e4)
-    ## new recommended preproc - does not work
-    # vis_dat = ov.space.svg(vis_dat, mode="prost", n_svgs=3000, target_sum=1e4, platform="visium")
-    vis_dat.raw = vis_dat
-    vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
+    vis_dat = an.read_h5ad(Path(anndata_folder) / f"st_slide_{slide_id}.h5ad")
     vis_dats[slide_id] = vis_dat
 
 vis_keys = list(vis_dats.keys())
@@ -133,34 +96,6 @@ We'd be interested in using scRNA-seq atlas to deconvolve the EV data. This help
 
 First we'll need to reformat the raw bulk RNA samples from EV to matrix form and prepare some plotting functions.
 
-```{python}
-#| output: false
-
-model_params = {
-  "celltype_key": "celltype",
-  "top_marker_num": 150,
-  "max_single_cells": round(len(sc_dat.obs.index) / 8),
-  # "max_single_cells": 8000, # increase the single cell count for sampling
-  "ratio_num": 1, # might solve some of the artifact problems
-  "gpu": 0
-}
-
-frac_params = {
-  "batch_size": 512,
-  "epochs": 1000, # looking at loss plot then 500 seems to be already enough, and we don't need the fractions really
-  "scaler": "ss", # seems to harmonise distributions better
-  "method": "tape",
-  "mode": "high-resolution"
-}
-
-vae_params = {
-  "batch_size": 512,
-  "hidden_size": 256,
-  "epoch_num": 100 # looking at loss plot then 500 seems to be already enough
-}
-
-```
-
 Train the model on the single cell reference data and generate the pseudo-single-cell data from the bulk samples. Here we divide the original dataset into "biopsy" and "EV" groups, which then summarises all of the corresponding sampling method samples into one representative group. This would also increase the confidence of cell profiles while normalising individual variance.
 
 ::: {.panel-tabset}
@@ -170,38 +105,7 @@ Train the model on the single cell reference data and generate the pseudo-single
 ```{python}
 
 gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
-if gen_sc_file.exists() and not rerun_all:
-  gen_ccht_ev = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=ccht_uf_raw[ccht_uf_pheno.query("group=='UF'").index],
-    single_data=sc_dat.to_memory(),
-    **model_params
-  )
-  # you have to run this to set the model_obj.cell_target_sum
-  # and not run the single_preprocess_lazy() as it seems to override cell_num attribute and does needless normalisation
-  _ = model_obj.predicted_fraction(**frac_params)
-  model_obj.bulk_preprocess_lazy()
-  model_obj.train(
-    vae_save_dir=Path(model_folder).expanduser() / "pseudosc_model",
-    vae_save_name="pseudosc_ev",
-    generate_save_dir=Path(model_folder).expanduser() / "pseudosc_gen",
-    generate_save_name="pseudosc_ev_gen",
-    **vae_params
-    )
-  gen_ccht_ev = model_obj.generate()
-  gen_ccht_ev.obs = (
-    gen_ccht_ev.obs
-    .join(
-      sc_dat.obs[["celltype", "lineage"]].drop_duplicates(keep="first").set_index("celltype"),
-      on="celltype"
-    )
-    # and now fix the join bc pandas does not seem to understand what "left join" means
-    .reset_index(names="barcodes")
-    .drop_duplicates(subset="barcodes", keep="first")
-  ).set_index("barcodes")
-  gen_ccht_ev.write(gen_sc_file)
-  del model_obj
+gen_ccht_ev = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
 
 ```
 
@@ -209,35 +113,21 @@ The generated dataset is then preprocessed, scaled, embedded into lower dimensio
 
 ```{python}
 
-gen_ccht_ev = ov.pp.preprocess(gen_ccht_ev, mode="shiftlog|pearson", n_HVGs=2000)
-ov.pp.scale(gen_ccht_ev)
-ov.pp.pca(gen_ccht_ev, layer='scaled', n_pcs=50)
-
-gen_ccht_ev.obsm['X_pca']=gen_ccht_ev.obsm['scaled|original|X_pca']
-ov.pl.embedding(
+sc.pl.embedding(
   gen_ccht_ev,
   basis='X_pca',
   color='celltype',
   frameon='small'
 )
 
-ov.pp.neighbors(
-  gen_ccht_ev,
-  n_neighbors=15,
-  n_pcs=50,
-  use_rep='scaled|original|X_pca'
-)
-
-ov.pp.umap(gen_ccht_ev)
-
-ov.pl.embedding(
+sc.pl.embedding(
   gen_ccht_ev,
   basis='X_umap',
   color='celltype',
   frameon='small'
 )
 
-ov.pl.embedding(
+sc.pl.embedding(
   gen_ccht_ev,
   basis='X_umap',
   color='lineage',
@@ -251,36 +141,7 @@ ov.pl.embedding(
 ```{python}
 
 gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
-if gen_sc_file.exists() and not rerun_all:
-  gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
-else:
-  model_obj = ov.bulk2single.Bulk2Single(
-    bulk_data=ccht_uf_raw[ccht_uf_pheno.query("group=='biopsy'").index],
-    single_data=sc_dat.to_memory(),
-    **model_params
-  )
-  _ = model_obj.predicted_fraction(**frac_params) # you have to run this to set the model_obj.cell_target_sum
-  model_obj.bulk_preprocess_lazy()
-  model_obj.train(
-    vae_save_dir=Path(model_folder).expanduser() / "pseudosc_model",
-    vae_save_name="pseudosc_bio",
-    generate_save_dir=Path(model_folder).expanduser() / "pseudosc_gen",
-    generate_save_name="pseudosc_bio_gen",
-    **vae_params
-    )
-  gen_ccht_bio = model_obj.generate()
-  gen_ccht_bio.obs = (
-    gen_ccht_bio.obs
-    .join(
-      sc_dat.obs[["celltype", "lineage"]].drop_duplicates(keep="first").set_index("celltype"),
-      on="celltype"
-    )
-    # and now fix the join bc pandas does not seem to understand what "left join" means
-    .reset_index(names="barcodes")
-    .drop_duplicates(subset="barcodes", keep="first")
-  ).set_index("barcodes")
-  gen_ccht_bio.write(gen_sc_file)
-  del model_obj
+gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
 
 ```
 
@@ -288,35 +149,21 @@ The generated dataset is then preprocessed, scaled, embedded into lower dimensio
 
 ```{python}
 
-gen_ccht_bio = ov.pp.preprocess(gen_ccht_bio, mode="shiftlog|pearson", n_HVGs=2000)
-ov.pp.scale(gen_ccht_bio)
-ov.pp.pca(gen_ccht_bio, layer='scaled', n_pcs=50)
-
-gen_ccht_bio.obsm['X_pca'] = gen_ccht_bio.obsm['scaled|original|X_pca']
-ov.pl.embedding(
+sc.pl.embedding(
   gen_ccht_bio,
   basis='X_pca',
   color='celltype',
   frameon='small'
 )
 
-ov.pp.neighbors(
-  gen_ccht_bio,
-  n_neighbors=15,
-  n_pcs=50,
-  use_rep='scaled|original|X_pca'
-)
-
-ov.pp.umap(gen_ccht_bio)
-
-ov.pl.embedding(
+sc.pl.embedding(
   gen_ccht_bio,
   basis='X_umap',
   color='celltype',
   frameon='small'
 )
 
-ov.pl.embedding(
+sc.pl.embedding(
   gen_ccht_bio,
   basis='X_umap',
   color='lineage',
@@ -392,6 +239,7 @@ For the following analysis, we will look at only the early secretory samples - 1
 
 ```{python}
 
+## read the datasets in again
 gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_ev.h5ad"
 vis_dat_ev = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_bio.h5ad"
@@ -409,41 +257,27 @@ sub_ct = {
 
 ```{python}
 
-def multiclass_spat(gen_data, vis_data, ct_group):
-  cts = ( # avoid some errors from celltypes having same name as genes
-    gen_data.obs
-    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
-    .celltype
-    .unique()
-  )
-  the_conditional = " \
-    (lineage=='Epithelial') &  \
-    celltype not in @vis_data.var.index & \
-    celltype in @vis_data.obs.columns \
-  "
-  cts = ( # avoid some errors from celltypes having same name as genes
-    gen_ccht_ev.obs
-    .query(the_conditional)
-    .celltype
-    .unique()
-  )
-  ## select the maximum enrichment value for the spot and plot it
-  vis_data.obs = vis_data.obs.assign(
-    max_key = vis_data.obs.loc[:,cts].idxmax(axis=1),
-    max_val = vis_data.obs.loc[:,cts].max(axis=1)
-    )
-  sc.pl.spatial(
-    vis_data,
-    color="max_val",
-    size=1.1,
-    alpha_img=.5,
-    img_key='hires',
-    # limit color scale at 99% quantile of cell abundance
-    vmin=0, vmax='p95',
-    alpha=.5
-  )
+sq.gr.spatial_neighbors(vis_dat_ev, spatial_key="spatial")
+the_conditional = " \
+  lineage=='Epithelial' & \
+  celltype not in @vis_dat_ev.var.index & \
+  celltype in @vis_dat_ev.obs.columns \
+"
+cts = ( # avoid some errors from celltypes having same name as genes
+  gen_ccht_ev.obs
+  .query(the_conditional)
+  .celltype
+  .unique()
+)
+# filter out celltypes with good clustering
+sq.gr.spatial_autocorr(vis_dat_ev, attr="obs", genes=cts, mode="geary", copy=True, transformation=True)
 
-multiclass_spat(gen_ccht_ev, vis_dat_ev, "Epithelial")
+sq.pl.spatial_scatter(
+  vis_dat_ev,
+  spatial_key="",
+  shape="hex",
+  color="Luminal"
+)
 
 ```
 
