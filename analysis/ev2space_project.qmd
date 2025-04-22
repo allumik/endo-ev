@@ -221,15 +221,18 @@ example_sample = "152810" # "E184-1_bottom"
 
 # Calculate summary statistics for the ST slides
 
-Here we try to quantify the difference in distances of different enrichment signatures. For this, we calculate the following statistics per slide:
+Here we try to quantify the difference in distances of different enrichment signatures. For this, we calculate the following statistics:
 
-* Per cell type
-  * Correlation via `scipy.signal.correlate2d`
+* Per cell type over all the slides
   * Simple absolute difference of enrichment per spot
+  * Correlation between slides via `scipy.signal.correlate2d`
   * Apply 2D filtering and then calculate the average distance to enrichment cluster on another projection
-* Per lineage
-  * Simple absolute difference of enrichment per spot
-  * Multicolor lineage plots
+    * Try either mean or max filtering for the most enriched cell type
+* General clustering statistics over all the slide
+  * Moran's I which indicates the strength of clustering, here applied on celltype abundances with the `squidpy.gr.spatial_autocorr` function
+  * Ripley's K-function on the maximum enrichment cell type, calculated via `squidpy.gr.ripley`
+  * Jaccard Index compared to the `ref` slide after filtering enrichment scores with a lower quartile threshold
+  * Total distance (Wasserstein distance?) per celltype over the whole slide per celltype
 
 For the filtering step we wish to remove any lowly enriched clusters so that only the more highly expressed features are left. This step is also applied before the multiclass plots so that the lowly enriched values wouldnt affect the other cell types. The lowly enriched region filtering is performed via a simple thresholding approach where the threshold is the lower quartile of the distribution over the slide for the cell type.
 
@@ -245,38 +248,45 @@ vis_dat_ev = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_bio.h5ad"
 vis_dat_bio = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_ref.h5ad"
-vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-
-## create a subset of max 7 celltypes per larger lineage groups
-sub_ct = {
-  "Mesenchymal": ["eStromal", "dStromal_mid", "dStromal_early", "uSMCs", "mPV", "Fibroblast_basalis"],
-  "Epithelial": ["Luminal", "Ciliated", "Glandular", "Glandular_secretory", "preGlandular", "preLuminal", "preCiliated"]
-}
+vis_dat_ref = sc.read_h5ad(gen_st_file, backed="r").to_memory()
 
 ```
+
 
 ```{python}
 
 sq.gr.spatial_neighbors(vis_dat_ev, spatial_key="spatial")
 the_conditional = " \
-  lineage=='Epithelial' & \
   celltype not in @vis_dat_ev.var.index & \
   celltype in @vis_dat_ev.obs.columns \
 "
-cts = ( # avoid some errors from celltypes having same name as genes
-  gen_ccht_ev.obs
-  .query(the_conditional)
-  .celltype
-  .unique()
-)
+# avoid some errors from celltypes having same name as genes
+cts = gen_ccht_ev.obs.query(the_conditional).celltype.unique()
+
 # filter out celltypes with good clustering
-sq.gr.spatial_autocorr(vis_dat_ev, attr="obs", genes=cts, mode="geary", copy=True, transformation=True)
+morans_autocorr = sq.gr.spatial_autocorr(
+  vis_dat_ev,
+  genes=cts,
+  attr="obs",
+  mode="geary",
+  n_perms=1000,
+  n_jobs=8,
+  copy=True,
+  transformation=True
+)
+# Filter for significant p-values and positive I scores (indicating clustering)
+signf_ct = morans_autocorr.query("pval_sim_fdr_bh < 0.05 and C > 0").index
+
+```
+
+```{python}
 
 sq.pl.spatial_scatter(
   vis_dat_ev,
-  spatial_key="",
+  color=signf_ct,
+  spatial_key="spatial",
   shape="hex",
-  color="Luminal"
+  img=False
 )
 
 ```
