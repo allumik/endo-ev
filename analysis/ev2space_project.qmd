@@ -17,6 +17,8 @@ Set up the environment and load the deps:
 #| output: false
 
 import re
+import glob
+import warnings
 import pandas as pd
 pd.set_option('display.max_columns', 100)
 import scanpy as sc
@@ -30,10 +32,9 @@ from pathlib import Path
 from os import getenv
 from dotenv import load_dotenv
 from scipy.sparse import csr_matrix
-from scipy.stats import ttest_ind
-from scipy.stats import spearmanr
-from scipy.stats import f_oneway
-from scipy.stats import tukey_hsd
+from scipy.stats import ttest_ind, spearmanr, f_oneway, tukey_hsd, pearsonr, wasserstein_distance
+from scipy.spatial.distance import jaccard, euclidean
+from sklearn.metrics import jaccard_score # More direct for boolean masks
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from sklearn.decomposition import PCA
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
@@ -242,42 +243,313 @@ For the following analysis, we will look at only the early secretory samples - 1
 
 ```{python}
 
-## read the datasets in again
-gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_ev.h5ad"
-vis_dat_ev = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_bio.h5ad"
-vis_dat_bio = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-gen_st_file = Path(anndata_folder).expanduser() / "c2l_152807_ref.h5ad"
-vis_dat_ref = sc.read_h5ad(gen_st_file, backed="r").to_memory()
+# Function to load AnnData objects from a directory
+def load_spatial_data(data_dir, pattern="c2l_*.h5ad"):
+  """Loads AnnData objects matching the pattern."""
+  data_dict = {}
+  file_paths = glob.glob(os.path.join(data_dir, pattern))
+  if not file_paths:
+    warnings.warn(f"No files found matching pattern '{pattern}' in directory '{data_dir}'")
+    return data_dict
+
+  for file_path in file_paths:
+    file_name = os.path.basename(file_path)
+    match = re.match(r"c2l_(\d*?)_(ev|bio|ref)\.h5ad", file_name)
+    if match:
+      slide_id = match.group(1)
+      ref_type = match.group(2)
+      try:
+        adata = sc.read_h5ad(file_path, backed="r").to_memory()
+
+        # Ensure consistent cell type order for comparisons later
+        adata = adata[:, sorted(adata.var_names)].copy()
+
+        data_dict[(slide_id, ref_type)] = adata
+      except Exception as e:
+        warnings.warn(f"Could not load or process {file_name}: {e}")
+    else:
+        warnings.warn(f"Filename {file_name} did not match expected pattern.")
+
+  return data_dict
+
+
+# Load the data
+data_directory = Path(anndata_folder).expanduser() # Current directory, adjust as needed
+adata_collection = load_spatial_data(data_directory)
 
 ```
-
 
 ```{python}
+# define the functions for the comparison metrics
+# Function to calculate comparison metrics between two AnnData objects
+def calculate_comparison_metrics(adata_ref, adata_comp, jaccard_threshold_quantile=0.75):
+  results = []
+  # adata_comp = vis_dat_ev
+  # adata_ref = vis_dat_ref
+  cell_types = np.intersect1d(
+    adata_comp.obsm[OBSM_KEY].columns,
+    adata_ref.obsm[OBSM_KEY].columns
+  )
 
-sq.gr.spatial_neighbors(vis_dat_ev, spatial_key="spatial")
-the_conditional = " \
-  celltype not in @vis_dat_ev.var.index & \
-  celltype in @vis_dat_ev.obs.columns \
-"
-# avoid some errors from celltypes having same name as genes
-cts = gen_ccht_ev.obs.query(the_conditional).celltype.unique()
+  # --- Get enrichment data from obsm ---
+  try:
+    X_ref = np.asarray(adata_ref.obsm[OBSM_KEY][cell_types])
+    X_comp = np.asarray(adata_comp.obsm[OBSM_KEY][cell_types])
+  except KeyError:
+    warnings.warn(f"'{OBSM_KEY}' not found in obsm for comparison. Skipping metrics.")
+    return pd.DataFrame() # Return empty dataframe
 
-# filter out celltypes with good clustering
-morans_autocorr = sq.gr.spatial_autocorr(
-  vis_dat_ev,
-  genes=cts,
-  attr="obs",
-  mode="geary",
-  n_perms=1000,
-  n_jobs=8,
-  copy=True,
-  transformation=True
-)
-# Filter for significant p-values and positive I scores (indicating clustering)
-signf_ct = morans_autocorr.query("pval_sim_fdr_bh < 0.05 and C > 0").index
+  coords_ref = adata_ref.obsm['spatial']
+  coords_comp = adata_comp.obsm['spatial'] # Should be identical
 
+  # --- Per Cell Type Metrics ---
+  for i, ct in enumerate(cell_types):
+    vec_ref = X_ref[:, i]
+    vec_comp = X_comp[:, i]
+
+    # 1. Mean Absolute Difference per Spot
+    abs_diff = np.mean(np.abs(vec_ref - vec_comp))
+    results.append({'cell_type': ct, 'metric': 'Mean Absolute Difference', 'value': abs_diff})
+
+    # 2. Spot-wise Correlation (Pearson)
+    if np.std(vec_ref) > 1e-6 and np.std(vec_comp) > 1e-6:
+        corr, _ = pearsonr(vec_ref, vec_comp)
+    else:
+        corr = 1.0 if np.allclose(vec_ref, vec_comp) else 0.0
+    results.append({'cell_type': ct, 'metric': 'Pearson Correlation', 'value': corr})
+
+    # 3. Centroid Distance of Highly Enriched Spots
+    q_ref = np.quantile(vec_ref, jaccard_threshold_quantile)
+    q_comp = np.quantile(vec_comp, jaccard_threshold_quantile)
+    high_mask_ref = vec_ref > q_ref
+    high_mask_comp = vec_comp > q_comp
+
+    if np.any(high_mask_ref) and np.any(high_mask_comp):
+      centroid_ref = coords_ref[high_mask_ref, :].mean(axis=0)
+      centroid_comp = coords_comp[high_mask_comp, :].mean(axis=0)
+      centroid_dist = euclidean(centroid_ref, centroid_comp)
+    else:
+      centroid_dist = np.nan
+    results.append({'cell_type': ct, 'metric': f'Centroid Distance (>{jaccard_threshold_quantile*100:.0f}%)', 'value': centroid_dist})
+
+    # 4. Jaccard Index
+    if len(high_mask_ref) == len(high_mask_comp):
+      jaccard_val = jaccard_score(high_mask_ref, high_mask_comp)
+    else:
+      jaccard_val = np.nan
+    results.append({'cell_type': ct, 'metric': f'Jaccard Index (>{jaccard_threshold_quantile*100:.0f}%)', 'value': jaccard_val})
+
+    # 5. Wasserstein Distance (1D)
+    wasserstein_dist = wasserstein_distance(vec_ref, vec_comp)
+    results.append({'cell_type': ct, 'metric': 'Wasserstein Distance (1D)', 'value': wasserstein_dist})
+
+  return pd.DataFrame(results)
+
+
+
+# Function to calculate single-adata metrics (Moran's I and Ripley's L AUC)
+def calculate_single_adata_metrics(adata):
+  results = []
+  cell_types = adata.obsm[OBSM_KEY].columns
+  metrics_calc = {} # To store intermediate results
+
+  # Check which expected cell types are actually present as columns in obs
+  valid_cts_in_obs = [ct for ct in cell_types if ct in adata.obs.columns]
+  missing_cts_in_obs = [ct for ct in cell_types if ct not in adata.obs.columns]
+  if missing_cts_in_obs:
+    warnings.warn(f"Cell types {missing_cts_in_obs} not found as columns in adata.obs. Moran's I will only be calculated for {valid_cts_in_obs}.")
+  
+  # Store for Ripley, Moran uses attr='obs'
+  enrichment_data = adata.obs[valid_cts_in_obs]
+
+  # --- Moran's I (using attr="obs") ---
+  # Calculate Moran's I directly using obs columns
+  sq.gr.spatial_autocorr(
+    adata,                 # Use original adata
+    genes=valid_cts_in_obs,# Pass list of column names in obs
+    attr="obs",            # Specify reading from obs
+    mode="moran",
+    n_perms=100,           # Use consistent params
+    n_jobs=1,              # Use consistent params
+    # copy=True # Let squidpy handle storing results in adata.uns
+  )
+  # Results are stored in adata.uns['moranI']
+  moran_results = adata.uns['moranI']
+
+  # Store results, handling potentially missing calculations
+  for ct in cell_types:
+    if ct not in metrics_calc: metrics_calc[ct] = {}
+    if ct in moran_results.index:
+      metrics_calc[ct]['Moran I'] = moran_results.loc[ct, 'I']
+      metrics_calc[ct]['Moran I PValue'] = moran_results.loc[ct, 'pval_norm']
+      metrics_calc[ct]['Moran I FDR'] = moran_results.loc[ct, 'pval_sim_fdr_bh']
+    else:
+      # Could be missing if ct wasn't in valid_cts_in_obs or if calculation failed
+      metrics_calc[ct]['Moran I'] = np.nan
+      metrics_calc[ct]['Moran I PValue'] = np.nan
+      metrics_calc[ct]['Moran I FDR'] = np.nan
+
+  # --- Ripley's Statistic (L-function AUC & Min P-value) ---
+  # 1. Assign max enrichment cell type
+  max_ct_col = '_max_enrichment_ct_temp' # Use temporary column name
+  enrichment_matrix = enrichment_data.to_numpy()
+  ct_names_for_max = enrichment_data.columns # Use the actual columns used
+
+  if enrichment_matrix is not None and enrichment_matrix.shape[0] > 0 and enrichment_matrix.shape[1] > 0 :
+    max_indices = np.argmax(enrichment_matrix, axis=1)
+    max_ct_names = ct_names_for_max[max_indices]
+    adata.obs[max_ct_col] = pd.Categorical(max_ct_names)
+
+    # 2. Calculate Ripley's L-function using copy=True
+    max_coord_diff = np.max(adata.obsm['spatial'].max(axis=0) - adata.obsm['spatial'].min(axis=0))
+    ripley_max_dist = max_coord_diff / 4
+    n_simulations = 100 # Number of simulations for p-value calculation
+
+    valid_categories = adata.obs[max_ct_col].value_counts()
+    valid_categories = valid_categories[valid_categories > 0].index
+
+    if len(valid_categories) > 0:
+      # --- Call Ripley with copy=True ---
+      ripley_results_dict = sq.gr.ripley(
+          adata,
+          cluster_key=max_ct_col,
+          mode='L',
+          max_dist=ripley_max_dist,
+          n_simulations=n_simulations, # Must be > 0 for pvalues
+          copy=True # Return results directly
+      )
+
+      # --- Extract results from dictionary ---
+      distances = ripley_results_dict.get('bins', np.array([]))
+      l_values_df = ripley_results_dict.get('L_stat', pd.DataFrame())
+      p_values_df = ripley_results_dict.get('pvalues', pd.DataFrame())
+
+      # 3. Calculate AUC and Min P-value for each cell type category
+      for ct in cell_types:
+        if ct not in metrics_calc: metrics_calc[ct] = {}
+        if ct in l_values_df.index: # Check if calculated for this ct
+          # Calculate AUC
+          l_values = l_values_df.loc[ct].values
+          l_minus_r = l_values - distances
+          ripley_auc = auc(distances, l_minus_r)
+          metrics_calc[ct]['Ripley L AUC'] = ripley_auc
+
+          # Calculate Min P-value
+          if ct in p_values_df.index:
+              # Use nanmin to ignore potential NaNs within the row
+              p_values_ct = p_values_df.loc[ct].values
+              # Check if all p-values are NaN before taking min
+              if np.all(np.isnan(p_values_ct)):
+                  min_p_value = np.nan
+              else:
+                  min_p_value = np.nanmin(p_values_ct)
+              metrics_calc[ct]['Ripley L Min PValue'] = min_p_value
+          else:
+              metrics_calc[ct]['Ripley L Min PValue'] = np.nan # Should not happen if in l_values_df
+        else:
+            # Cell type might not have been max, or wasn't in valid_cts_in_obs
+            metrics_calc[ct]['Ripley L AUC'] = np.nan
+            metrics_calc[ct]['Ripley L Min PValue'] = np.nan
+    else:
+      warnings.warn(f"[Slide: {adata.uns.get('slide_id','N/A')}] No valid categories found for Ripley's L calculation based on max enrichment.")
+      for ct in cell_types:
+        if ct not in metrics_calc: metrics_calc[ct] = {}
+        metrics_calc[ct]['Ripley L AUC'] = np.nan
+        metrics_calc[ct]['Ripley L Min PValue'] = np.nan
+    # Clean up temporary column
+    if max_ct_col in adata.obs:
+        del adata.obs[max_ct_col]
+
+  else:
+      warnings.warn(f"[Slide: {adata.uns.get('slide_id','N/A')}] Skipping Ripley's L calculation due to missing or empty enrichment data.")
+      for ct in cell_types:
+          if ct not in metrics_calc: metrics_calc[ct] = {}
+          metrics_calc[ct]['Ripley L AUC'] = np.nan
+          metrics_calc[ct]['Ripley L Min PValue'] = np.nan
+
+
+
+  # --- Convert the collected metrics ---
+  for ct, metrics_dict in metrics_calc.items():
+    for metric_name, value in metrics_dict.items():
+      if metric_name == 'Moran I PValue' or 'Moran I FDR': continue # Handled below
+
+      result_entry = {
+        'cell_type': ct,
+        'metric': metric_name,
+        'value': value
+      }
+      if metric_name == 'Moran I' and 'Moran I PValue' and 'Moran I FDR' in metrics_dict:
+        result_entry['p_value'] = metrics_dict['Moran I PValue']
+        result_entry['fdr'] = metrics_dict['Moran I FDR']
+
+      results.append(result_entry)
+
+  return pd.DataFrame(results)
 ```
+
+```{python}
+## Run the functions on the dataset
+# some preliminary metrics
+jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
+# Define the key where enrichment values reside
+OBSM_KEY = "tangram_ct_pred"
+
+# Process each slide
+all_results = []
+slide_ids = sorted(list(set(key[0] for key in adata_collection.keys())))
+for slide_id in slide_ids:
+  print(f"Processing slide: {slide_id}")
+
+  # Calculate Spatial Graph (once per slide, using ref adata)
+  # Ensure graph calculation works even if previously calculated
+  # Use generic coord_type for flexibility if not strictly Visium grid
+  metricses = []
+  for datatype in ["ref", "ev", "bio"]:
+    # get it from the collection
+    current_dataset = adata_collection.get((slide_id, datatype))
+    sq.gr.spatial_neighbors(
+      current_dataset, 
+      coord_type="generic", 
+      spatial_key="spatial", 
+      key_added="spatial"
+    )
+    # and set it to the collection
+    adata_collection[(slide_id, datatype)] = current_dataset
+
+    # Calculate Single-Adata Metrics (Moran's I)
+    metrics_df = calculate_single_adata_metrics(current_dataset)
+    metrics_df['reference'] = datatype
+    metricses.append(metrics_df)
+
+  single_metrics = pd.concat(metricses, ignore_index=True)
+  single_metrics['slide_id'] = slide_id
+  single_metrics['comparison'] = 'within_reference' # Indicate these are not pairwise comparisons
+  all_results.append(single_metrics)
+
+  # Calculate Pairwise Comparison Metrics
+  comp_metrics_ev_vs_ref = calculate_comparison_metrics(
+    adata_collection.get((slide_id, "ref")),
+    adata_collection.get((slide_id, "ev")),
+    jaccard_thresh
+  )
+  comp_metrics_ev_vs_ref['slide_id'] = slide_id
+  comp_metrics_ev_vs_ref['comparison'] = 'ev_vs_ref'
+  all_results.append(comp_metrics_ev_vs_ref)
+
+  comp_metrics_bio_vs_ref = calculate_comparison_metrics(
+    adata_collection.get((slide_id, "ref")),
+    adata_collection.get((slide_id, "bio")),
+    jaccard_thresh
+  )
+  comp_metrics_bio_vs_ref['slide_id'] = slide_id
+  comp_metrics_bio_vs_ref['comparison'] = 'bio_vs_ref'
+  all_results.append(comp_metrics_bio_vs_ref)
+
+# Combine all results into a single DataFrame
+final_df = pd.concat(all_results, ignore_index=True)
+```
+
 
 ```{python}
 
