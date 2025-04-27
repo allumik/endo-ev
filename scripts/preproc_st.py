@@ -4,9 +4,12 @@ import scanpy as sc
 import omicverse as ov
 import anndata as an
 import numpy as np
+from torch import OutOfMemoryError
+from torch.cuda import empty_cache
 from pathlib import Path
 from os import getenv
 from dotenv import load_dotenv
+
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -131,7 +134,9 @@ ov.pp.neighbors(gen_ccht_ev, n_neighbors=15, n_pcs=50, use_rep='scaled|original|
 ov.pp.umap(gen_ccht_ev)
 
 gen_ccht_ev.write(gen_sc_file)
+# gen_ccht_ev = an.read_h5ad(gen_sc_file, backed="r")
 del model_obj
+empty_cache()
 
 ## Second for the Biopsy samples
 gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
@@ -169,8 +174,9 @@ ov.pp.neighbors(gen_ccht_bio, n_neighbors=15, n_pcs=50, use_rep='scaled|original
 ov.pp.umap(gen_ccht_bio)
 
 gen_ccht_bio.write(gen_sc_file)
+# gen_ccht_bio = an.read_h5ad(gen_sc_file, backed="r")
 del model_obj
-
+empty_cache()
 
 
 # %% Preprocess and project on the spatial slides
@@ -179,6 +185,8 @@ slide_ids = []
 for vis_fold in slides_path.iterdir():
   if vis_fold.is_dir():
     slide_id = vis_fold.stem
+    # Use this line to select out only single samples if needed
+    # if not slide_id == "152811": continue
     print("Working on slide " + str(slide_id))
     vis_dat = sc.read_visium(path=vis_fold) # for vento data
     # vis_dat = sc.read_visium(path=vis_fold / "outs") # for inhouse data
@@ -202,7 +210,13 @@ for vis_fold in slides_path.iterdir():
       vis_dat,
       clusters="celltype"
     )
-    model_obj.train(mode="cells", num_epochs=500, device="cuda")
+    try:
+      empty_cache()
+      model_obj.train(mode="cells", num_epochs=500, device="cuda")
+    except OutOfMemoryError as e:
+      print(f"CUDA ran out of memory: {e}")
+      print("Falling back to CPU training.")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu")
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj
@@ -214,7 +228,13 @@ for vis_fold in slides_path.iterdir():
       vis_dat,
       clusters="celltype"
     )
-    model_obj.train(mode="cells", num_epochs=500, device="cuda")
+    try:
+      empty_cache()
+      model_obj.train(mode="cells", num_epochs=500, device="cuda")
+    except OutOfMemoryError as e:
+      print(f"CUDA ran out of memory: {e}")
+      print("Falling back to CPU training.")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu")
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj
@@ -226,8 +246,13 @@ for vis_fold in slides_path.iterdir():
       vis_dat,
       clusters="celltype"
     )
-    # do it on cpu as the models gets too large for the gpu
-    model_obj.train(mode="cells", num_epochs=500, device="cpu")
+    try:
+      empty_cache()
+      model_obj.train(mode="cells", num_epochs=500, device="cuda")
+    except OutOfMemoryError as e:
+      print(f"CUDA ran out of memory: {e}")
+      print("Falling back to CPU training.")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu")
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj

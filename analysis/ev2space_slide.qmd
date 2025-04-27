@@ -16,7 +16,7 @@ Next, we try out the classical spatial deconvolution method `Tangram` to integra
 
 ```{python}
 # show the example slide sample
-sc.pl.spatial(
+sq.pl.spatial(
   vis_dats[example_sample].to_memory(),
   color=[None, "log1p_total_counts"],
   ncols=2
@@ -32,24 +32,7 @@ def plotter_spat(gen_data, vis_data, ct_group):
     .celltype
     .unique()
   )
-  sc.pl.spatial(
-    vis_data,
-    cmap='magma',
-    color=cts,
-    ncols=3, size=1.3,
-    img_key='hires',
-    # limit color scale at 99% quantile of cell abundance
-    vmin=0, vmax='p95'
-  )
-
-def multiclass_spat(gen_data, vis_data, ct_group):
-  cts = ( # avoid some errors from celltypes having same name as genes
-    gen_data.obs
-    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
-    .celltype
-    .unique()
-  )
-  ov.lp.plot_spatial(
+  sq.pl.spatial(
     vis_data,
     cmap='magma',
     color=cts,
