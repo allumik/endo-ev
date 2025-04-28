@@ -201,15 +201,12 @@ for vis_fold in slides_path.iterdir():
     vis_dat.raw = vis_dat
     vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
     slide_ids.append(slide_id)
-    # write out the ev projection
+
     vis_dat.write(Path(anndata_folder) / f"st_slide_{slide_id}.h5ad")
 
+    # write out the ev projection
     gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{slide_id}_ev.h5ad"
-    model_obj = ov.space.Tangram(
-      gen_ccht_ev.to_memory(),
-      vis_dat,
-      clusters="celltype"
-    )
+    model_obj = ov.space.Tangram(gen_ccht_ev.to_memory(), vis_dat, clusters="celltype")
     try:
       empty_cache()
       model_obj.train(mode="cells", num_epochs=500, device="cuda")
@@ -223,11 +220,7 @@ for vis_fold in slides_path.iterdir():
 
     # write out the biopsy projection
     gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{slide_id}_bio.h5ad"
-    model_obj = ov.space.Tangram(
-      gen_ccht_bio.to_memory(),
-      vis_dat,
-      clusters="celltype"
-    )
+    model_obj = ov.space.Tangram(gen_ccht_bio.to_memory(), vis_dat, clusters="celltype")
     try:
       empty_cache()
       model_obj.train(mode="cells", num_epochs=500, device="cuda")
@@ -241,11 +234,7 @@ for vis_fold in slides_path.iterdir():
 
     # write out the scRNAseq projectino as reference
     gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{slide_id}_ref.h5ad"
-    model_obj = ov.space.Tangram(
-      sc_dat.to_memory(),
-      vis_dat,
-      clusters="celltype"
-    )
+    model_obj = ov.space.Tangram(sc_dat.to_memory(), vis_dat, clusters="celltype")
     try:
       empty_cache()
       model_obj.train(mode="cells", num_epochs=500, device="cuda")

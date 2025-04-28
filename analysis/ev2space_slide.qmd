@@ -1,22 +1,10 @@
----
-title: "Single cell perspective into Extracellular Vesicules projected onto Spatial Transcriptomics"
-format:
-  html:
-    code-fold: true
-    code-tools: true
-    embed-resources: true
-    self-contained-math: true
-jupyter: python3
----
-
-
 ## Tangram + cell2location
 
 Next, we try out the classical spatial deconvolution method `Tangram` to integrate the Visium slide and the generated scRNA-seq dataset. Then, we apply `cell2location` to perform spatial deconvoluion. The benefit of this approach is that it is less computationally heavy and we are not anymore limited by GPU VRAM, while being still performing on par with previous methods.
 
 ```{python}
 # show the example slide sample
-sq.pl.spatial(
+sq.pl.spatial_scatter(
   vis_dats[example_sample].to_memory(),
   color=[None, "log1p_total_counts"],
   ncols=2
@@ -32,14 +20,11 @@ def plotter_spat(gen_data, vis_data, ct_group):
     .celltype
     .unique()
   )
-  sq.pl.spatial(
+  sq.pl.spatial_scatter(
     vis_data,
     cmap='magma',
     color=cts,
-    ncols=3, size=1.3,
-    img_key='hires',
-    # limit color scale at 99% quantile of cell abundance
-    vmin=0, vmax='p95'
+    ncols=3, size=1.3
   )
 
 ```
