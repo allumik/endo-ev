@@ -101,7 +101,7 @@ def calculate_single_adata_metrics(adata):
     genes=valid_cts_in_obs,# Pass list of column names in obs
     attr="obs",            # Specify reading from obs
     mode="moran",
-    n_perms=100,           # Use consistent params
+    n_perms=1000,           # Use consistent params
     n_jobs=1,              # Use consistent params
   )
   # Results are stored in adata.uns['moranI']
@@ -140,7 +140,7 @@ def calculate_single_adata_metrics(adata):
         cluster_key=max_ct_col,
         mode='L',
         max_dist=max_coord_diff / 4,
-        n_simulations=100, # Must be > 0 for pvalues
+        n_simulations=1000, # Must be > 0 for pvalues
         copy=True # Return results directly
     )
 
