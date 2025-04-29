@@ -12,6 +12,7 @@ dependencies:
   - ipykernel
   - ipywidgets>=7.6
   - ipython<=8
+  - notebook
   - h5py
   - scipy #<=1.10.1 # for scipy.linalg.tril
 
