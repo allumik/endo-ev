@@ -552,7 +552,6 @@ final_df = pd.concat(all_results, ignore_index=True)
 
 
 ```{python}
-
 sq.pl.spatial_scatter(
   vis_dat_ev,
   color=signf_ct,
@@ -560,6 +559,5 @@ sq.pl.spatial_scatter(
   shape="hex",
   img=False
 )
-
 ```
 
