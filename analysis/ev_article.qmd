@@ -9,8 +9,7 @@ format:
 jupyter: python3
 ---
 
-
-# Prelude: Setup environment
+# Prelude: Set up the environment
 
 This document contains the condensed form of analysis and some more technical parts of the final article.
 
@@ -25,11 +24,17 @@ Setup the environment and import dependencies.
 #| output: false
 
 import re
+import glob
+import warnings
 import numpy as np
 import pandas as pd
 import anndata as an
 import scanpy as sc
+import squidpy as sq
 import altair as alt
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 from IPython.display import HTML
 from pathlib import Path
 from dotenv import load_dotenv
@@ -42,6 +47,10 @@ from sklearn.preprocessing import normalize
 try: from analysis.helpers.deconvo_functions import *
 except ImportError: from helpers.deconvo_functions import *
 
+## import the functions used in this report (got too long to include them in the report)
+try: from analysis.helpers.projection_functions import *
+except ImportError: from helpers.projection_functions import *
+
 ## load the environment variables from the .env file
 load_dotenv()
 if getenv("DATA_FOLDER") is None:
@@ -51,6 +60,7 @@ proj_folder = getenv("PROJ_FOLDER")
 anndata_folder = getenv("ANNDATA_FOLDER")
 atlas_folder = getenv("ATLAS_FOLDER")
 data_folder = getenv("DATA_FOLDER")
+st_folder = getenv("ST_FOLDER")
 raw_data_folder = getenv("RAW_DATA_FOLDER")
 
 # some other dataset locations
@@ -74,7 +84,7 @@ Load in the datasets:
 * bulk transcriptomes from UF derived EV's of endometrium and Vigano et al. EV transcriptomes (`comb_uf_raw`).
 * phenotype table for the EV and Vigano et al. samples (`comb_uf_pheno`).
 
-The HECA dataset is renormalised with the `omicsverse` v1.6.7 package's `preprocess` function with the following command `ov.pp.preprocess(sc_dat, mode="pearson|pearson", n_HVGs=3000)`. This normalises the dataset with the Pearson method (??? et al (check the documentation)).
+The HECA dataset is renormalised with the `omicsverse` v1.6.7 package's `preprocess` function with the following command `ov.pp.preprocess(sc_dat, mode="pearson|pearson", n_HVGs=3000)`. This normalises the dataset with the Pearson method (??? et al (check the omicsverse documentation)).
 
 ```{python}
 #| output: false
@@ -428,7 +438,11 @@ stat_comb_prim = (
   .pipe(swap_groups, swapper)
   .assign(
     p_stars=lambda x:
-      np.select([ x["p-adj"] <= 0.001, x["p-adj"] <= 0.01, x["p-adj"] <= 0.05, True], ["***", "**", "*", ""]),
+      np.select(
+          [ x["p-adj"] <= 0.001, x["p-adj"] <= 0.01, x["p-adj"] <= 0.05, True],
+          ["***", "**", "*", ""],
+          default=""  # Add this default value
+      ),
     comparison=lambda x: x.group1 + "_vs_" + x.group2,
     meandiff_format=lambda x: "Δ " + round(x.meandiff * 100, 2).astype(str) + "%",
     padj_format=lambda x: np.where(x["p-adj"] < 0.01, "FDR <0.01", "FDR " + round(x["p-adj"], 2).astype(str))
@@ -1125,90 +1139,272 @@ pca_block = (pca_one & pca_two) | (pca_three & pca_four)
 
 ## FIG 5: Spatial Projections
 
+In this chapter we are projecting the single cell datasets generated from the bulk RNA-seq samples to the Spatial Transcriptomic Visium slides. For this, we are using the Tangram + cell2location method. The Tangram method is a deep learning-based approach that uses a neural network to learn the spatial distribution of cell types from the single-cell data and then applies this learned distribution to the spatial transcriptomic data. The cell2location method is a probabilistic model that uses the spatial transcriptomic data to infer the abundance of cell types in each spot on the slide. The combinatino of these two methods allows us to generate a high-resolution spatial map of the cell types in the tissue.
+
+Given the nature of the data, we expect to see a high correlatino between the projected biopsy and the reference raw scRNA-seq data. The projected UF data should be more dispersed, as the UF samples are not directly comparable to the biopsy samples. Still, the UF samples should show a similar pattern of cell type distribution as the biopsy samples, per the assumption that the abundances of cell types in the UF samples indicate where the EV's are coming from in the tissue.
+
+Therefore, in this chapter we are using two slides of the early-secretory tissue for this bulk2space method of projection. Then, we are summarising the results using various statistical methods for comparison between projection and the reference:
+
+* Mean Average Difference (MAD) - the mean of the absolute differences between the projected bulk and the reference raw scRNA-seq data
+* Centroid Distance (CD) - the distance between the centroids of the projected bulk and the reference raw scRNA-seq data
+* Jaccard Index (JI) - the ratio of the intersection of the projected bulk and the reference raw scRNA-seq data to the union of the projected bulk and the reference raw scRNA-seq data. Here we have assigned the cell types to the spots based on the maximum abundance of the cell type in the spot. This is a common approach for calculating the Jaccard index in spatial transcriptomics, as it allows us to compare the cell type distributions between the projected bulk and the reference raw scRNA-seq data.
+
+In addition to comparing between the projected bulk and the reference raw scRNA-seq data, we are also testing the clustering for every slide separately. This is done to see if the clustering is consistent across the slides. To test the significance of clusters, we are using Moran's I test. This test is used to assess the spatial autocorrelation of the cell types in the projected bulk and the reference raw scRNA-seq data. The Moran's I test measures the degree of clustering of the cell types.
+
+But, first lets load the preprocessed datasets. The counts are normalised and the most variable genes (n=3000) are selected.
+
+```{python}
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
+gen_ccht_ev = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
+gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+```
+
+```{python}
+slide_ids = ["152807", "152811"]
+data_directory = Path(anndata_folder).expanduser()
+# load only the early secretory samples
+adata_collection = load_spatial_data(data_directory)
+# create the subset using a dictionary comprehension
+adata_collection = {key: value for key, value in adata_collection.items() if key[0] in set(slide_ids)}
+```
+
+```{python}
+# some preliminary metrics
+jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
+# but then read in the stats table anyways
+stats_df = pd.read_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
+```
+
 ::: {.panel-tabset}
 
 ### Select a tab: {.unnumbered .unlisted}
 
+### Example of a ST slide
+
 ```{python}
-
-def preproc_sc(gen_sc):
-  gen_ccht_ev = ov.pp.preprocess(gen_sc, mode="shiftlog|pearson", n_HVGs=2000)
-  ov.pp.scale(gen_sc)
-  ov.pp.pca(gen_sc, layer='scaled', n_pcs=50)
-
-  gen_sc.obsm['X_pca']=gen_sc.obsm['scaled|original|X_pca']
-  ov.pl.embedding(
-    gen_sc,
-    basis='X_pca',
-    color='celltype',
-    frameon='small'
+# show the example slide sample
+adat = adata_collection[(slide_ids[0], "ref")].to_memory()
+crop_coords = get_spatial_crop_coords(adat)
+sq.pl.spatial_scatter(
+  adat,
+  color=[None], crop_coord=crop_coords,
+  ncols=2
   )
-
-  ov.pp.neighbors(
-    gen_sc,
-    n_neighbors=15,
-    n_pcs=50,
-    use_rep='scaled|original|X_pca'
-  )
-
-  ov.pp.umap(gen_sc)
-
-  ov.pl.embedding(
-    gen_sc,
-    basis='X_umap',
-    color='celltype',
-    frameon='small'
-  )
-
-  ov.pl.embedding(
-    gen_sc,
-    basis='X_umap',
-    color='lineage',
-    frameon='small'
-  )
-
-def plotter_spat(gen_data, vis_data, ct_group):
-  cts = ( # avoid some errors from celltypes having same name as genes
-    gen_data.obs
-    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
-    .celltype
-    .unique()
-  )
-  sc.pl.spatial(
-    vis_data,
-    cmap='magma',
-    color=cts,
-    ncols=3, size=1.3,
-    img_key='hires',
-    # limit color scale at 99% quantile of cell abundance
-    vmin=0, vmax='p95'
-  )
-
 ```
 
-### Example of a ST field
+### Example of the projected abundcances with single cell type
 
 ```{python}
+# and then show a single exemplary cell type in different projections
+# TODO: find a way to get the crop_coord from the adata object
+cts = ["Glandular"]
 
-def plotter_spat(gen_data, vis_data, ct_group):
-  cts = ( # avoid some errors from celltypes having same name as genes
-    gen_data.obs
-    .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
-    .celltype
-    .unique()
+sq.pl.spatial_scatter(
+  adat,
+  cmap='magma',
+  color=cts,
+  crop_coord=crop_coords,
+  size=1.3, title="Reference"
+)
+sq.pl.spatial_scatter(
+  adata_collection[(slide_ids[0], "ev")],
+  cmap='magma',
+  color=cts,
+  crop_coord=crop_coords,
+  size=1.3, title="EV"
+)
+sq.pl.spatial_scatter(
+  adata_collection[(slide_ids[0], "bio")],
+  cmap='magma',
+  color=cts,
+  crop_coord=crop_coords,
+  size=1.3, title="Biopsy"
+)
+```
+
+### Example of the UMAP clustering of generated single cell data
+
+```{python}
+sc.pl.embedding(gen_ccht_ev, basis='X_umap', color='lineage', frameon='small')
+sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='lineage', frameon='small')
+```
+
+### The boxplots of different comparison methods
+
+```{python}
+# --- Data Preparation ---
+plot_df_pairwise = stats_df[stats_df['comparison'].isin(['ev_vs_ref', 'bio_vs_ref'])].copy()
+exclude_metrics = ["Pearson Correlation"]  # Metrics to exclude from visualization
+col_wrap = 3  # Number of columns for facet wrapping
+
+# Filter out excluded metrics
+filtered_df = plot_df_pairwise[~plot_df_pairwise['metric'].isin(exclude_metrics)]
+
+# --- Altair Plot Construction ---
+# 1. Define the base boxplot
+boxplot = alt.Chart(filtered_df).mark_boxplot(extent='min-max').encode(
+  x=alt.X('lineage:N', title='Lineage', axis=alt.Axis(labelAngle=90)),  # Rotate x-axis labels
+  y=alt.Y('value:Q', title='Value'),  # Statistic value on Y-axis
+  xOffset=alt.XOffset('comparison:N', title=None),  # Rotate x-axis labels
+  color=alt.Color('comparison:N', legend=alt.Legend(title='Comparison')),  # Color by comparison
+  tooltip=['metric', 'lineage', 'comparison', 'value']  # Add tooltips for interactivity
+)
+
+# 2. Apply faceting
+facet_chart = boxplot.facet(
+  column=alt.Column('metric:N', title=None, header=alt.Header(labelOrient='top')),  # Facet by metric
+).resolve_scale(
+  x='independent',
+  y='independent'
+).properties(
+  columns=col_wrap,  # Wrap facets into specified number of columns
+  title=alt.TitleParams(
+      'Comparison Metrics: EV vs. BIO relative to REF (across slides)',
+      anchor='middle'  # Center the overall title
   )
-  sc.pl.spatial(
-    vis_data,
-    cmap='magma',
-    color=cts,
-    ncols=3, size=1.3,
-    img_key='hires',
-    # limit color scale at 99% quantile of cell abundance
-    vmin=0, vmax='p95'
+)
+
+# To display in a Jupyter environment:
+facet_chart
+```
+
+### Pearson correlation
+
+```{python}
+# 0. Prepare the data for the scatter plot
+metric_to_plot = 'Pearson Correlation' # Choose a metric
+scatter_df = (
+  plot_df_pairwise[plot_df_pairwise['metric'] == metric_to_plot]
+  .pivot_table(index=['slide_id', 'celltype', 'lineage'], columns='comparison', values='value')
+  .reset_index()
+)
+scatter_df.dropna(inplace=True) # Drop rows if one comparison is missing
+
+# 1. Define the base scatter plot layer
+# Data will be passed during faceting because we layer first
+points = alt.Chart().mark_point(filled=True, size=60, opacity=0.7).encode(
+  x=alt.X('ev_vs_ref', title='EV vs REF'), # Set axis title
+  y=alt.Y('bio_vs_ref', title='BIO vs REF'), # Set axis title
+  color=alt.Color('celltype', legend=alt.Legend(title="Celltype", orient='bottom-right', labelFontSize=9, offset=0)), # Add legend title
+  tooltip=['slide_id', 'celltype', 'lineage', 'ev_vs_ref', 'bio_vs_ref'] # Tooltips
+)
+
+# 2. Prepare data for the y=x diagonal line
+# Calculate overall min/max across both relevant columns IN THE FILTERED DATA
+min_val = min(scatter_df['ev_vs_ref'].min(), scatter_df['bio_vs_ref'].min())
+max_val = max(scatter_df['ev_vs_ref'].max(), scatter_df['bio_vs_ref'].max())
+# Add a small buffer to ensure the line extends slightly beyond points
+buffer = (max_val - min_val) * 0.05
+min_val = min_val - buffer if min_val - buffer is not np.nan else 0 # Handle potential NaN from empty df
+max_val = max_val + buffer if max_val + buffer is not np.nan else 1 # Handle potential NaN
+
+# 3. Define the diagonal line layer and the connecting line layer
+line_df = pd.DataFrame({'x': [min_val, max_val], 'y': [min_val, max_val]})
+diagonal_line = alt.Chart(line_df).mark_line(
+  color='black',
+  strokeDash=[5,5], # Dashed line style
+  opacity=0.25      # Corresponds to alpha=0.25
+).encode(x='x', y='y')
+
+# Create the line layer connecting points within each celltype per facet
+lines = points.mark_line(opacity=0.2).encode(order='celltype')
+
+# 4. Layer the diagonal line and the points
+# Line first so points are drawn on top
+chart_layers = diagonal_line + lines + points
+
+# 5. Apply faceting to the layered chart
+final_chart = chart_layers.facet(
+  data=scatter_df, # Provide the data for faceting here
+  column=alt.Column('lineage', header=alt.Header(titleOrient="top", labelOrient="top", title=None)), # Facet by lineage, remove default header title
+  columns=3 # Corresponds to col_wrap=3
+).resolve_scale(
+  x='independent',
+  y='independent',
+  color='independent'
+).properties(
+  title=alt.TitleParams( # Set overall title
+      f'{metric_to_plot}: EV vs REF & BIO vs REF',
+      anchor='middle' # Center the title
+      )
+).interactive() # Enable zoom/pan
+
+# Display the chart
+final_chart
+```
+
+### Moran's autocorrelation
+
+And now for the Moran's I compared to the Morans' simulated FDR (based on 1000 iterations). The Moran's I is a measure of spatial autocorrelation, and the FDR is a measure of how significant the Moran's I is compared to random distributions. We will plot the Moran's I against the FDR for each cell type and lineage, with a horizontal line at FDR = 0.05 to indicate significance.
+
+```{python}
+# Filter for Moran's I metrics
+moran_df = stats_df[stats_df['metric'].isin(['Moran I', 'Moran I FDR'])].copy()
+
+# Pivot the table
+moran_pivot = (
+  moran_df.pivot_table(
+    index=['slide_id', 'celltype', 'lineage', 'comparison'],
+    columns='metric',
+    values='value'
   )
+  .reset_index()
+  .rename_axis(None, axis=1) # Remove the 'metric' name from columns index
+)
 
-vis_dat_ev
+# Define the desired Y-axis tick values
+tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
 
+# Define the base chart for layering (data defined here is fine for layers)
+base = alt.Chart().encode(
+  x=alt.X('Moran I', axis=alt.Axis(title="Moran's I", grid=False)),
+  y=alt.Y(
+    'Moran I FDR',
+    scale=alt.Scale(type='log', reverse=True), # Log scale, inverted
+    axis=alt.Axis(title="Moran's I FDR (log scale)", values=tick_values) # Title and specific ticks
+  ),
+  color=alt.Color('celltype', legend=alt.Legend(title="Celltypes", orient='bottom-right', offset=10)), # Color by celltype, set legend title
+  tooltip=['slide_id', 'celltype', 'lineage', 'comparison', 'Moran I', 'Moran I FDR'] # Tooltips on hover
+)
+
+# Create the scatter points layer
+points = base.mark_point(filled=True, size=60, opacity=0.8)
+
+# Create the line layer connecting points within each celltype per facet
+lines = base.mark_line(opacity=0.2).encode(
+  order='Moran I' # Connect points based on Moran I value
+)
+
+# Create the horizontal rule layer at y=0.05
+# This layer doesn't need the main dataframe
+rule = alt.Chart().mark_rule(color='lightgrey', strokeDash=[5,5], opacity=0.2).encode(
+  y=alt.datum(0.05)
+)
+
+# Layer the chart elements: rule first (bottom), then lines, then points
+chart_layers = rule + lines + points
+
+# Apply faceting
+# *** Explicitly pass the data to the facet method ***
+final_chart = chart_layers.facet(
+  data=moran_pivot,
+  column=alt.Column('lineage:O', header=alt.Header(titleOrient="top", labelOrient="top"), title=None), # Facet by lineage
+  columns=3 # Specify number of columns for wrapping
+).resolve_scale(
+  x='independent', # Don't share x-axis scale/limits
+  color='independent' # Don't share color scale/limits
+).properties(
+  title=alt.TitleParams(
+    text=f'{metric_to_plot}: EV vs REF & BIO vs REF',
+    anchor='middle'
+  )
+).interactive() # Enable zooming and panning
+
+# To display in a Jupyter environment:
+final_chart
 ```
 
 :::
+
+`Comment: as these plots can't be visualised using a single framework (contains both matplotlib and Altair libraries), then these are the subplots that are generated separately and compiled later manually`

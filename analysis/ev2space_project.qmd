@@ -248,34 +248,6 @@ del vis_dats
 
 
 ```{python}
-# Function to load AnnData objects from a directory
-def load_spatial_data(data_dir, pattern="c2l_*.h5ad"):
-  """Loads AnnData objects matching the pattern."""
-  data_dict = {}
-  file_paths = glob.glob(os.path.join(data_dir, pattern))
-  print(file_paths)
-  if not file_paths:
-    warnings.warn(f"No files found matching pattern '{pattern}' in directory '{data_dir}'")
-    return data_dict
-
-  for file_path in file_paths:
-    file_name = os.path.basename(file_path)
-    match = re.match(r"c2l_(\d*?)_(ev|bio|ref)\.h5ad", file_name)
-    if match:
-      slide_id = match.group(1)
-      ref_type = match.group(2)
-      try:
-        adata = sc.read_h5ad(file_path, backed="r").to_memory()
-
-        data_dict[(slide_id, ref_type)] = adata
-      except Exception as e:
-        warnings.warn(f"Could not load or process {file_name}: {e}")
-    else:
-        warnings.warn(f"Filename {file_name} did not match expected pattern.")
-
-  return data_dict
-
-
 # Load the data
 data_directory = Path(anndata_folder).expanduser() # Current directory, adjust as needed
 # load only the early secretory samples
@@ -307,9 +279,9 @@ for slide_id in slide_ids:
     # get it from the collection
     current_dataset = adata_collection.get((slide_id, datatype))
     sq.gr.spatial_neighbors(
-      current_dataset, 
-      coord_type="generic", 
-      spatial_key="spatial", 
+      current_dataset,
+      coord_type="generic",
+      spatial_key="spatial",
       key_added="spatial"
     )
     # and set it to the collection

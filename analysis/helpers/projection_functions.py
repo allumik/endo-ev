@@ -1,6 +1,11 @@
+import os 
+import re
+import glob
+import warnings
 import pandas as pd
 import numpy as np
-import warnings
+import anndata as ad
+import scanpy as sc
 import seaborn as sns
 import matplotlib.pyplot as plt
 import squidpy as sq
@@ -11,6 +16,73 @@ from sklearn.metrics import auc, jaccard_score # More direct for boolean masks
 
 # Define the key where enrichment values reside
 OBSM_KEY = "tangram_ct_pred"
+
+
+def get_spatial_crop_coords(adata: ad.AnnData) -> tuple[float, float, float, float] | None:
+  """
+  Calculates the bounding box coordinates for spatial data points.
+
+  Args:
+    adata: An AnnData object containing spatial coordinates in adata.obsm['spatial'].
+
+  Returns:
+    A tuple containing (min_x, min_y, max_x, max_y) representing the
+    bounding box, or None if 'spatial' key is not found in adata.obsm.
+  """
+  if 'spatial' not in adata.obsm:
+    print("Error: 'spatial' key not found in adata.obsm")
+    return None
+
+  spatial_coords = adata.obsm['spatial']
+
+  # Ensure spatial_coords is a NumPy array for efficient calculation
+  if not isinstance(spatial_coords, np.ndarray):
+      try:
+          spatial_coords = np.array(spatial_coords)
+      except Exception as e:
+          print(f"Error converting spatial coordinates to NumPy array: {e}")
+          return None
+
+  if spatial_coords.shape[1] < 2:
+      print("Error: spatial coordinates need at least 2 columns (x and y).")
+      return None
+
+  # Assuming column 0 is x and column 1 is y
+  min_x = spatial_coords[:, 0].min()
+  max_x = spatial_coords[:, 0].max()
+  min_y = spatial_coords[:, 1].min()
+  max_y = spatial_coords[:, 1].max()
+
+  crop_coords = (min_x, min_y, max_x, max_y)
+  return crop_coords
+
+# Function to load AnnData objects from a directory
+def load_spatial_data(data_dir, pattern="c2l_*.h5ad"):
+  """Loads AnnData objects matching the pattern."""
+  data_dict = {}
+  file_paths = glob.glob(os.path.join(data_dir, pattern))
+  print(file_paths)
+  if not file_paths:
+    warnings.warn(f"No files found matching pattern '{pattern}' in directory '{data_dir}'")
+    return data_dict
+
+  for file_path in file_paths:
+    file_name = os.path.basename(file_path)
+    match = re.match(r"c2l_(\d*?)_(ev|bio|ref)\.h5ad", file_name)
+    if match:
+      slide_id = match.group(1)
+      ref_type = match.group(2)
+      try:
+        adata = sc.read_h5ad(file_path, backed="r").to_memory()
+
+        data_dict[(slide_id, ref_type)] = adata
+      except Exception as e:
+        warnings.warn(f"Could not load or process {file_name}: {e}")
+    else:
+        warnings.warn(f"Filename {file_name} did not match expected pattern.")
+
+  return data_dict
+
 
 # define the functions for the comparison metrics
 # Function to calculate comparison metrics between two AnnData objects

@@ -12,7 +12,6 @@ sq.pl.spatial_scatter(
 ```
 
 ```{python}
-
 def plotter_spat(gen_data, vis_data, ct_group):
   cts = ( # avoid some errors from celltypes having same name as genes
     gen_data.obs
@@ -26,7 +25,6 @@ def plotter_spat(gen_data, vis_data, ct_group):
     color=cts,
     ncols=3, size=1.3
   )
-
 ```
 
 
@@ -35,10 +33,8 @@ def plotter_spat(gen_data, vis_data, ct_group):
 ## EV group
 
 ```{python}
-
 gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_ev.h5ad"
 vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-
 ```
 
 Visualise the results
@@ -70,11 +66,9 @@ plotter_spat(gen_ccht_ev, vis_dat_proj, "Immune")
 ## Biopsy group
 
 ```{python}
-
 gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_bio.h5ad"
 gen_ccht_bio = gen_ccht_bio[gen_ccht_bio.obs.query("celltype not in @gen_ccht_bio.var.index & celltype not in ['ILC3']").index, :]
 vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-
 ```
 
 Visualise the results
@@ -106,10 +100,8 @@ plotter_spat(gen_ccht_bio, vis_dat_proj, "Immune")
 ## scRNA-seq data
 
 ```{python}
-
 gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{example_sample}_ref.h5ad"
 vis_dat_proj = sc.read_h5ad(gen_st_file, backed="r").to_memory()
-
 ```
 
 Visualise the results
