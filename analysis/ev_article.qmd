@@ -297,7 +297,7 @@ Main points of interest:
 * We observed the featureCounts mRNA ratio to other transcript types to indicate the quality of the samples, especially in the EV samples with lower genomic input.
 * We have also included samples from the late-secretory phase of the menstrual cycle to show the differences in the cell type proportions leading up to the decidualisation of the endometrium.
 
-The deconvolutional model was trained on the HECAv2 dataset, which was then used to generate pseudo-single-cell data from the bulk samples. The pSC data was then projected onto the spatial transcriptomic slides using a combination of Tangram and cell2location methods. Instead of using more traditional regression based methods for deconvolution, we used generative models to generate pseudo-single-cell data from the bulk samples for both deconvolution and projection to spatial omic data. This approach allows us to generalise the cell type expression profiles and detect those representative profiles in endometrium-derived extracellular vesicles (EVs). Although regression-based methods are more interpretable, they are also more prone to overfitting and can be less robust in the presence of noise or outliers. Generative models, on the other hand, can capture complex relationships between features as latent representations and can be more resilient to noise, making them a powerful tool for deconvolution tasks for extracellular vesicules. Although recent benchmarking studies have shown that regressional methods can be used successfully for deconvolution of liquid biopsy samples, then it is still unclear how well they perform compared to generative models [Larsen et al](https://onlinelibrary.wiley.com/doi/abs/10.1002/jev2.12511). Therefore, it can be argued that representation based deconvolution methods relax the assumption that RNA molecules in EV's recapituliate only the origin tissue transcriptional profiles. Finally, generative autoencoder models can also be used to generate synthetic single-cell data from bulk samples, which can be subsequently integrated with a spatial transcriptomic dataset to visualise possible origins of the EVs.
+The deconvolutional model was trained on the HECAv2 dataset, which was then used to generate pseudo-single-cell data from the bulk samples. The pSC data was then projected onto the spatial transcriptomic slides using a combination of Tangram and cell2location methods [cite the methods]. Instead of using more traditional regression based methods for deconvolution, we used generative models to generate pseudo-single-cell data from the bulk samples for both deconvolution and projection to spatial omic data. This approach allows us to generalise the cell type expression profiles and detect those representative profiles in endometrium-derived extracellular vesicles (EVs). Although regression-based methods are more interpretable, they are also more prone to overfitting and can be less robust in the presence of noise or outliers [source? TAPE article?]. Generative models, on the other hand, can capture complex relationships between features as latent representations and can be more resilient to noise, making them a powerful tool for deconvolution tasks for extracellular vesicules. Although recent benchmarking studies have shown that regressional methods can be used successfully for deconvolution of liquid biopsy samples, then it is still unclear how well they perform compared to generative models [[Larsen et al](https://onlinelibrary.wiley.com/doi/abs/10.1002/jev2.12511)]. Therefore, it can be argued that representation based deconvolution methods relax the assumption that RNA molecules in EV's recapituliate only the origin tissue transcriptional profiles. Finally, generative autoencoder models can also be used to generate synthetic single-cell data from bulk samples, which can be subsequently integrated with a spatial transcriptomic dataset to visualise possible origins of the EVs.
 
 ::: {.panel-tabset}
 
@@ -1279,7 +1279,7 @@ boxplot = alt.Chart(filtered_df).mark_boxplot(extent='min-max').encode(
 )
 
 # 2. Apply faceting
-facet_chart = boxplot.facet(
+boxplots = boxplot.facet(
   column=alt.Column('metric:N', title=None, header=alt.Header(labelOrient='top')),  # Facet by metric
 ).resolve_scale(
   x='independent',
@@ -1293,7 +1293,7 @@ facet_chart = boxplot.facet(
 )
 
 # To display in a Jupyter environment:
-facet_chart
+boxplots.interactive()  # Enable zoom/pan
 ```
 
 ### Pearson correlation
@@ -1342,7 +1342,7 @@ lines = points.mark_line(opacity=0.2).encode(order='celltype')
 chart_layers = diagonal_line + lines + points
 
 # 5. Apply faceting to the layered chart
-final_chart = chart_layers.facet(
+corr_plots = chart_layers.facet(
   data=scatter_df, # Provide the data for faceting here
   column=alt.Column('lineage', header=alt.Header(titleOrient="top", labelOrient="top", title=None)), # Facet by lineage, remove default header title
   columns=3 # Corresponds to col_wrap=3
@@ -1355,10 +1355,10 @@ final_chart = chart_layers.facet(
       f'{metric_to_plot}: EV vs REF & BIO vs REF',
       anchor='middle' # Center the title
       )
-).interactive() # Enable zoom/pan
+)
 
 # Display the chart
-final_chart
+corr_plots.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
 ```
 
 ### Moran's autocorrelation
@@ -1414,7 +1414,7 @@ chart_layers = rule + lines + points
 
 # Apply faceting
 # *** Explicitly pass the data to the facet method ***
-final_chart = chart_layers.facet(
+morans_chart = chart_layers.facet(
   data=moran_pivot,
   column=alt.Column('lineage:O', header=alt.Header(titleOrient="top", labelOrient="top"), title=None), # Facet by lineage
   columns=3 # Specify number of columns for wrapping
@@ -1426,15 +1426,26 @@ final_chart = chart_layers.facet(
     text=f'{metric_to_plot}: EV vs REF & BIO vs REF',
     anchor='middle'
   )
-).interactive() # Enable zooming and panning
+)
 
 # To display in a Jupyter environment:
-final_chart
+morans_chart.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
 ```
 
 :::
 
 `Comment: as these plots can't be visualised using a single framework (contains both matplotlib and Altair libraries), then these are the subplots that are generated separately and compiled later manually`
+
+```{python}
+# Try to make a layout plot with the spacers
+# placeholder image 
+raw_st_example = spacer_with_text(height=300, width=200)
+projection_example = spacer_with_text(height=300, width=200)
+(
+  (raw_st_example & projection_example) |
+  (boxplots & pearson_corr & morans_chart)
+)
+```
 
 
 # Discussion
