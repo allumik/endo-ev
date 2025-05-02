@@ -1434,16 +1434,15 @@ morans_chart.interactive() # Enable zooming and panning and tooltips and selecti
 
 :::
 
-`Comment: as these plots can't be visualised using a single framework (contains both matplotlib and Altair libraries), then these are the subplots that are generated separately and compiled later manually`
+> As these plots can't be visualised using a single framework (contains both matplotlib and Altair libraries), then these are the subplots that are generated separately and compiled later manually
 
 ```{python}
-# Try to make a layout plot with the spacers
-# placeholder image 
-raw_st_example = spacer_with_text(height=300, width=200)
-projection_example = spacer_with_text(height=300, width=200)
+# Try to make a layout plot with the spacers placeholder image
+raw_st_example = spacer_with_text(height=550, width=400)
+projection_example = spacer_with_text(height=550, width=400)
 (
   (raw_st_example & projection_example) |
-  (boxplots & pearson_corr & morans_chart)
+  (boxplots & corr_plots & morans_chart)
 )
 ```
 

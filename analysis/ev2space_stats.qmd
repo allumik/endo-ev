@@ -107,21 +107,14 @@ For the filtering step we wish to remove any lowly enriched clusters so that onl
 
 In addition, we have subset some of the more niche celltypes that either don't exhibit a patterns in expression or are not related to the current cycle phase. Therefore, we will exclude endothelial cell types from the analysis, as it has only two main cell types (arterial and vascular). 
 
-::: {.panel-tabset}
-
-## Early-secretory samples
-
-For the following analysis, we will look at only the early secretory samples - 152807 and 152811.
-
 ```{python}
 ## Run the functions on the dataset
-# some preliminary metrics
 jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
-slide_ids = ["152807", "152811"]
 
 # Process each slide
+all_slides = ["152806", "152810", "152807", "152811"]
 all_results = []
-for slide_id in slide_ids:
+for slide_id in all_slides:
   print(f"Processing slide: {slide_id}")
 
   # Calculate Spatial Graph (once per slide, using ref adata)
@@ -129,7 +122,7 @@ for slide_id in slide_ids:
   # Use generic coord_type for flexibility if not strictly Visium grid
   metricses = []
   for datatype in ["ref", "ev", "bio"]:
-    # get it from the collection
+    # get it from the collection to run the spatial neighbors
     current_dataset = adata_collection.get((slide_id, datatype))
     sq.gr.spatial_neighbors(
       current_dataset,
@@ -137,16 +130,17 @@ for slide_id in slide_ids:
       spatial_key="spatial",
       key_added="spatial"
     )
-    # and set it to the collection
+    # and set it back to the collection for later use
     adata_collection[(slide_id, datatype)] = current_dataset
 
-    # Calculate Single-Adata Metrics (Moran's I)
+    # Calculate Single-Adata Metrics (Moran's I) for each projection
     metrics_df = calculate_single_adata_metrics(current_dataset)
+    metrics_df['comparison'] = datatype
     metricses.append(metrics_df)
 
   single_metrics = pd.concat(metricses, ignore_index=True)
   single_metrics['slide_id'] = slide_id
-  single_metrics['comparison'] = 'within_reference' # Indicate these are not pairwise comparisons
+  # single_metrics['comparison'] = 'within_reference' # Indicate these are not pairwise comparisons
   all_results.append(single_metrics)
 
   # Calculate Pairwise Comparison Metrics for different comparisions
@@ -169,7 +163,7 @@ for slide_id in slide_ids:
   all_results.append(comp_metrics_bio_vs_ref)
 
 # Combine all results into a single DataFrame and add lineage mapping
-stats_df = (
+all_results = (
   pd.concat(all_results, ignore_index=True)
   .rename(columns={"cell_type": "celltype"})
   .join(general_cells, on="celltype")
@@ -177,16 +171,29 @@ stats_df = (
 
 # Exclude cell types in the "Endothelial" lineage
 endothelial_celltypes = general_cells[general_cells['lineage'] == 'Endothelial'].index
-stats_df = stats_df[~stats_df['celltype'].isin(endothelial_celltypes)].copy()
+all_results = all_results[~all_results['celltype'].isin(endothelial_celltypes)].copy()
 
 # Remove unused categories from categorical columns if they exist
-if 'celltype' in stats_df.columns and pd.api.types.is_categorical_dtype(stats_df['celltype']):
-    stats_df['celltype'] = stats_df['celltype'].cat.remove_unused_categories()
-if 'lineage' in stats_df.columns and pd.api.types.is_categorical_dtype(stats_df['lineage']):
-    stats_df['lineage'] = stats_df['lineage'].cat.remove_unused_categories()
+if 'celltype' in all_results.columns and pd.api.types.is_categorical_dtype(all_results['celltype']):
+    all_results['celltype'] = all_results['celltype'].cat.remove_unused_categories()
+if 'lineage' in all_results.columns and pd.api.types.is_categorical_dtype(all_results['lineage']):
+    all_results['lineage'] = all_results['lineage'].cat.remove_unused_categories()
 
 # and write out the stats table for the article.qmd
-stats_df.to_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
+all_results.to_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
+```
+
+
+::: {.panel-tabset}
+
+## Early-secretory samples
+
+For the following analysis, we will look at only the early secretory samples - 152807 and 152811.
+
+```{python}
+# some preliminary metrics
+slide_ids = ["152807", "152811"]
+stats_df = all_results.query("slide_id in @slide_ids").copy()
 ```
 
 After running the analysis, we plot the stats. We do boxplots for the main difference between EVvsREF and BIOvsREF cases to see how the EV profiles affect the projection. And for the other metrics, we will do comparative scatter plots with the decision boundary for the correlation and for the overlap index. We separte those plots into 3 lineages, excluding the Vascular with only 2 celltypes.
@@ -372,79 +379,9 @@ Maybe we will abandon the Ripley's L-function for now, as it is not as interpret
 For the following analysis, we will look at only the early secretory samples - 152806 and 152810.
 
 ```{python}
-## Run the functions on the dataset
 # some preliminary metrics
-jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
 slide_ids = ["152806", "152810"]
-
-# Process each slide
-all_results = []
-for slide_id in slide_ids:
-  print(f"Processing slide: {slide_id}")
-
-  # Calculate Spatial Graph (once per slide, using ref adata)
-  # Ensure graph calculation works even if previously calculated
-  # Use generic coord_type for flexibility if not strictly Visium grid
-  metricses = []
-  for datatype in ["ref", "ev", "bio"]:
-    # get it from the collection
-    current_dataset = adata_collection.get((slide_id, datatype))
-    sq.gr.spatial_neighbors(
-      current_dataset,
-      coord_type="generic",
-      spatial_key="spatial",
-      key_added="spatial"
-    )
-    # and set it to the collection
-    adata_collection[(slide_id, datatype)] = current_dataset
-
-    # Calculate Single-Adata Metrics (Moran's I)
-    metrics_df = calculate_single_adata_metrics(current_dataset)
-    metricses.append(metrics_df)
-
-  single_metrics = pd.concat(metricses, ignore_index=True)
-  single_metrics['slide_id'] = slide_id
-  single_metrics['comparison'] = 'within_reference' # Indicate these are not pairwise comparisons
-  all_results.append(single_metrics)
-
-  # Calculate Pairwise Comparison Metrics for different comparisions
-  comp_metrics_ev_vs_ref = calculate_comparison_metrics(
-    adata_collection.get((slide_id, "ref")),
-    adata_collection.get((slide_id, "ev")),
-    jaccard_thresh
-  )
-  comp_metrics_ev_vs_ref['slide_id'] = slide_id
-  comp_metrics_ev_vs_ref['comparison'] = 'ev_vs_ref'
-  all_results.append(comp_metrics_ev_vs_ref)
-
-  comp_metrics_bio_vs_ref = calculate_comparison_metrics(
-    adata_collection.get((slide_id, "ref")),
-    adata_collection.get((slide_id, "bio")),
-    jaccard_thresh
-  )
-  comp_metrics_bio_vs_ref['slide_id'] = slide_id
-  comp_metrics_bio_vs_ref['comparison'] = 'bio_vs_ref'
-  all_results.append(comp_metrics_bio_vs_ref)
-
-# Combine all results into a single DataFrame and add lineage mapping
-stats_df = (
-  pd.concat(all_results, ignore_index=True)
-  .rename(columns={"cell_type": "celltype"})
-  .join(general_cells, on="celltype")
-)
-
-# Exclude cell types in the "Endothelial" lineage
-endothelial_celltypes = general_cells[general_cells['lineage'] == 'Endothelial'].index
-stats_df = stats_df[~stats_df['celltype'].isin(endothelial_celltypes)].copy()
-
-# Remove unused categories from categorical columns if they exist
-if 'celltype' in stats_df.columns and pd.api.types.is_categorical_dtype(stats_df['celltype']):
-    stats_df['celltype'] = stats_df['celltype'].cat.remove_unused_categories()
-if 'lineage' in stats_df.columns and pd.api.types.is_categorical_dtype(stats_df['lineage']):
-    stats_df['lineage'] = stats_df['lineage'].cat.remove_unused_categories()
-
-# and write out the stats table for the article.qmd
-stats_df.to_csv(Path(data_folder).expanduser() / "st_stats_table_prolif.csv")
+stats_df = all_results.query("slide_id in @slide_ids").copy()
 ```
 
 After running the analysis, we plot the stats. We do boxplots for the main difference between EVvsREF and BIOvsREF cases to see how the EV profiles affect the projection. And for the other metrics, we will do comparative scatter plots with the decision boundary for the correlation and for the overlap index. We separte those plots into 3 lineages, excluding the Vascular with only 2 celltypes.
