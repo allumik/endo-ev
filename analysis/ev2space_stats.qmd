@@ -169,6 +169,9 @@ all_results = (
   .join(general_cells, on="celltype")
 )
 
+# Add cycle phase information
+all_results['cyclephase'] = all_results['slide_id'].apply(lambda x: 'Secretory' if x in ["152807", "152811"] else 'Proliferative')
+
 # Exclude cell types in the "Endothelial" lineage
 endothelial_celltypes = general_cells[general_cells['lineage'] == 'Endothelial'].index
 all_results = all_results[~all_results['celltype'].isin(endothelial_celltypes)].copy()
@@ -280,10 +283,12 @@ def facet_scatter(data, **kwargs):
   sns.scatterplot(data=data, x="Moran I", y="Moran I FDR", hue="celltype",
                   alpha=0.7, ax=ax, legend=False, **kwargs) # Turn off default legend
   # Add lines connecting points of the same celltype across slides
-  sns.lineplot(
-    data=data, x="Moran I", y="Moran I FDR", hue="celltype", alpha=0.3,
-    units="celltype", estimator=None, sort=True, ax=ax, legend=False
-    )
+  # Only draw lines if there are multiple points for a celltype (i.e., across slides)
+  if data['celltype'].nunique() < len(data):
+      sns.lineplot(
+          data=data, x="Moran I", y="Moran I FDR", hue="celltype", alpha=0.3,
+          units="celltype", estimator=None, sort=True, ax=ax, legend=False
+      )
 
   # Apply axis modifications
   ax.axhline(0.05, ls='--', color='grey', alpha=0.5, zorder=0)
@@ -294,28 +299,43 @@ def facet_scatter(data, **kwargs):
 
   # Manually set Y-axis ticks
   # Define desired tick values (adjust these based on your data range)
-  tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
+  tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
   # Create corresponding labels
   tick_labels = [str(val) for val in tick_values]
 
   ax.yaxis.set_major_locator(ticker.FixedLocator(tick_values))
   ax.yaxis.set_major_formatter(ticker.FixedFormatter(tick_labels))
+  # Ensure y-limits accommodate the ticks if needed
+  current_ylim = ax.get_ylim()
+  ax.set_ylim(max(current_ylim[0], max(tick_values)*1.1), min(current_ylim[1], min(tick_values)*0.9))
+
 
   # Manually add legend to the side of each facet
   handles, labels = ax.get_legend_handles_labels()
-  ax.legend(handles, labels, title="Celltype", bbox_to_anchor=(1.05, 1), loc='upper left')
+  # Filter out potential duplicate legend entries if lineplot adds them
+  unique_handles_labels = {}
+  for handle, label in zip(handles, labels):
+      if label not in unique_handles_labels:
+          unique_handles_labels[label] = handle
+  ax.legend(unique_handles_labels.values(), unique_handles_labels.keys(),
+            title="Celltype", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
 
-# Create the FacetGrid instance
-g = sns.FacetGrid(moran_pivot, col="lineage", col_wrap=3, height=4, aspect=1.1,
-                  sharey=True, sharex=False, legend_out=False)
+# Create the FacetGrid instance with rows for comparison and columns for lineage
+g = sns.FacetGrid(
+  moran_pivot,
+  row="comparison", col="lineage",
+  height=3.5, aspect=1.2,
+  sharey=True, sharex=False, legend_out=False,
+  margin_titles=True
+  ) # Add margin titles for row/col names
 
 # Map the custom plotting function to each facet
 g.map_dataframe(facet_scatter)
 
 # Add titles and adjust layout
-g.set_titles(col_template="{col_name}")
-g.fig.suptitle("Moran's I vs. FDR by Lineage and Comparison", y=1.03)
-plt.tight_layout(rect=[0, 0, 0.9, 0.97])
+g.set_titles(row_template="{row_name}", col_template="{col_name}") # Set row/col titles
+g.fig.suptitle("Moran's I vs. FDR by Lineage and Comparison", y=1.03) # Overall title
+plt.tight_layout(rect=[0, 0, 0.9, 0.97]) # Adjust rect to prevent legend overlap
 plt.show()
 ```
 
@@ -468,10 +488,12 @@ def facet_scatter(data, **kwargs):
   sns.scatterplot(data=data, x="Moran I", y="Moran I FDR", hue="celltype",
                   alpha=0.7, ax=ax, legend=False, **kwargs) # Turn off default legend
   # Add lines connecting points of the same celltype across slides
-  sns.lineplot(
-    data=data, x="Moran I", y="Moran I FDR", hue="celltype", alpha=0.3,
-    units="celltype", estimator=None, sort=True, ax=ax, legend=False
-    )
+  # Only draw lines if there are multiple points for a celltype (i.e., across slides)
+  if data['celltype'].nunique() < len(data):
+      sns.lineplot(
+          data=data, x="Moran I", y="Moran I FDR", hue="celltype", alpha=0.3,
+          units="celltype", estimator=None, sort=True, ax=ax, legend=False
+      )
 
   # Apply axis modifications
   ax.axhline(0.05, ls='--', color='grey', alpha=0.5, zorder=0)
@@ -482,28 +504,43 @@ def facet_scatter(data, **kwargs):
 
   # Manually set Y-axis ticks
   # Define desired tick values (adjust these based on your data range)
-  tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
+  tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
   # Create corresponding labels
   tick_labels = [str(val) for val in tick_values]
 
   ax.yaxis.set_major_locator(ticker.FixedLocator(tick_values))
   ax.yaxis.set_major_formatter(ticker.FixedFormatter(tick_labels))
+  # Ensure y-limits accommodate the ticks if needed
+  current_ylim = ax.get_ylim()
+  ax.set_ylim(max(current_ylim[0], max(tick_values)*1.1), min(current_ylim[1], min(tick_values)*0.9))
+
 
   # Manually add legend to the side of each facet
   handles, labels = ax.get_legend_handles_labels()
-  ax.legend(handles, labels, title="Celltype", bbox_to_anchor=(1.05, 1), loc='upper left')
+  # Filter out potential duplicate legend entries if lineplot adds them
+  unique_handles_labels = {}
+  for handle, label in zip(handles, labels):
+      if label not in unique_handles_labels:
+          unique_handles_labels[label] = handle
+  ax.legend(unique_handles_labels.values(), unique_handles_labels.keys(),
+            title="Celltype", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
 
-# Create the FacetGrid instance
-g = sns.FacetGrid(moran_pivot, col="lineage", col_wrap=3, height=4, aspect=1.1,
-                  sharey=True, sharex=False, legend_out=False)
+# Create the FacetGrid instance with rows for comparison and columns for lineage
+g = sns.FacetGrid(
+  moran_pivot,
+  row="comparison", col="lineage",
+  height=3.5, aspect=1.2,
+  sharey=True, sharex=False, legend_out=False,
+  margin_titles=True # Add margin titles for row/col names
+  )
 
 # Map the custom plotting function to each facet
 g.map_dataframe(facet_scatter)
 
 # Add titles and adjust layout
-g.set_titles(col_template="{col_name}")
-g.fig.suptitle("Moran's I vs. FDR by Lineage and Comparison", y=1.03)
-plt.tight_layout(rect=[0, 0, 0.9, 0.97])
+g.set_titles(row_template="{row_name}", col_template="{col_name}") # Set row/col titles
+g.fig.suptitle("Moran's I vs. FDR by Lineage and Comparison", y=1.03) # Overall title
+plt.tight_layout(rect=[0, 0, 0.9, 0.97]) # Adjust rect to prevent legend overlap
 plt.show()
 ```
 

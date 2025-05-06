@@ -39,6 +39,7 @@ import altair as alt
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import matplotlib.patches as mpatches
 from os import getenv
 from pathlib import Path
 from dotenv import load_dotenv
@@ -178,7 +179,7 @@ adata_collection = {key: value for key, value in adata_collection.items() if key
 # some preliminary metrics
 jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
 # but then read in the stats table anyways
-stats_df = pd.read_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
+stats_df = pd.read_csv(Path(data_folder).expanduser() / "st_stats_table.csv", index_col=0)
 ```
 
 # Methods
@@ -1253,8 +1254,9 @@ sq.pl.spatial_scatter(
 ### Example of the UMAP clustering of generated single cell data
 
 ```{python}
-sc.pl.embedding(gen_ccht_ev, basis='X_umap', color='lineage', frameon='small')
-sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='lineage', frameon='small')
+# Plot with smaller size
+sc.pl.embedding(gen_ccht_ev, basis='X_umap', color='lineage', title="EV pSC UMAP", legend_loc="on data")
+sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='lineage', title="Biopsy pSC UMAP", legend_loc="on data")
 ```
 
 ### The boxplots of different comparison methods
@@ -1271,29 +1273,28 @@ filtered_df = plot_df_pairwise[~plot_df_pairwise['metric'].isin(exclude_metrics)
 # --- Altair Plot Construction ---
 # 1. Define the base boxplot
 boxplot = alt.Chart(filtered_df).mark_boxplot(extent='min-max').encode(
-  x=alt.X('lineage:N', title='Lineage', axis=alt.Axis(labelAngle=90)),  # Rotate x-axis labels
+  x=alt.X('lineage:N', title=None, axis=alt.Axis(labelAngle=45)),  # Rotate x-axis labels
   y=alt.Y('value:Q', title='Value'),  # Statistic value on Y-axis
   xOffset=alt.XOffset('comparison:N', title=None),  # Rotate x-axis labels
-  color=alt.Color('comparison:N', legend=alt.Legend(title='Comparison')),  # Color by comparison
-  tooltip=['metric', 'lineage', 'comparison', 'value']  # Add tooltips for interactivity
+  color=alt.Color('comparison:N', legend=alt.Legend(title='Comparison'))  # Color by comparison
 )
 
 # 2. Apply faceting
 boxplots = boxplot.facet(
   column=alt.Column('metric:N', title=None, header=alt.Header(labelOrient='top')),  # Facet by metric
+  row=alt.Row('cyclephase:N', title=None, header=alt.Header(labelOrient='right'))  # Facet by cyclephase
 ).resolve_scale(
   x='independent',
   y='independent'
 ).properties(
-  columns=col_wrap,  # Wrap facets into specified number of columns
   title=alt.TitleParams(
-      'Comparison Metrics: EV vs. BIO relative to REF (across slides)',
-      anchor='middle'  # Center the overall title
+    'Boxplots of Statistics by Metric and Comparison',
+    anchor='middle'  # Center the title
   )
 )
 
 # To display in a Jupyter environment:
-boxplots.interactive()  # Enable zoom/pan
+boxplots
 ```
 
 ### Pearson correlation
@@ -1303,7 +1304,8 @@ boxplots.interactive()  # Enable zoom/pan
 metric_to_plot = 'Pearson Correlation' # Choose a metric
 scatter_df = (
   plot_df_pairwise[plot_df_pairwise['metric'] == metric_to_plot]
-  .pivot_table(index=['slide_id', 'celltype', 'lineage'], columns='comparison', values='value')
+  # Add cyclephase to the index for faceting
+  .pivot_table(index=['slide_id', 'celltype', 'lineage', 'cyclephase'], columns='comparison', values='value')
   .reset_index()
 )
 scatter_df.dropna(inplace=True) # Drop rows if one comparison is missing
@@ -1344,12 +1346,14 @@ chart_layers = diagonal_line + lines + points
 # 5. Apply faceting to the layered chart
 corr_plots = chart_layers.facet(
   data=scatter_df, # Provide the data for faceting here
+  # Add row faceting by cyclephase
+  row=alt.Row('cyclephase', header=alt.Header(titleOrient="right", labelOrient="right", title=None)),
   column=alt.Column('lineage', header=alt.Header(titleOrient="top", labelOrient="top", title=None)), # Facet by lineage, remove default header title
   columns=3 # Corresponds to col_wrap=3
 ).resolve_scale(
-  x='independent',
-  y='independent',
-  color='independent'
+  x='independent', # Don't share x-axis scale/limits
+  y='independent', # Don't share y-axis scale/limits
+  color='independent' # Don't share color scale/limits
 ).properties(
   title=alt.TitleParams( # Set overall title
       f'{metric_to_plot}: EV vs REF & BIO vs REF',
@@ -1369,10 +1373,10 @@ And now for the Moran's I compared to the Morans' simulated FDR (based on 1000 i
 # Filter for Moran's I metrics
 moran_df = stats_df[stats_df['metric'].isin(['Moran I', 'Moran I FDR'])].copy()
 
-# Pivot the table
+# Pivot the table to get metrics as columns
 moran_pivot = (
   moran_df.pivot_table(
-    index=['slide_id', 'celltype', 'lineage', 'comparison'],
+    index=['slide_id', 'celltype', 'lineage', 'comparison', 'cyclephase'],
     columns='metric',
     values='value'
   )
@@ -1380,56 +1384,70 @@ moran_pivot = (
   .rename_axis(None, axis=1) # Remove the 'metric' name from columns index
 )
 
-# Define the desired Y-axis tick values
-tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
+# Create dummy slide_id by appending comparison
+moran_pivot['dummy_slide_id'] = moran_pivot['slide_id'].astype(str) + '_' + moran_pivot['comparison']
 
-# Define the base chart for layering (data defined here is fine for layers)
-base = alt.Chart().encode(
-  x=alt.X('Moran I', axis=alt.Axis(title="Moran's I", grid=False)),
-  y=alt.Y(
-    'Moran I FDR',
-    scale=alt.Scale(type='log', reverse=True), # Log scale, inverted
-    axis=alt.Axis(title="Moran's I FDR (log scale)", values=tick_values) # Title and specific ticks
-  ),
-  color=alt.Color('celltype', legend=alt.Legend(title="Celltypes", orient='bottom-right', offset=10)), # Color by celltype, set legend title
-  tooltip=['slide_id', 'celltype', 'lineage', 'comparison', 'Moran I', 'Moran I FDR'] # Tooltips on hover
+# --- Pivot for Heatmap Data and Mask ---
+# Pivot for Moran I values (contains NaNs where data is missing)
+heatmap_data = moran_pivot.pivot(index='celltype', columns='dummy_slide_id', values='Moran I')
+
+# Pivot for Moran I FDR values (contains NaNs where data is missing)
+fdr_data = moran_pivot.pivot(index='celltype', columns='dummy_slide_id', values='Moran I FDR')
+
+# Create the mask: True where FDR >= 0.05 OR where FDR is NaN (missing)
+# Mask should hide non-significant values.
+mask = (fdr_data >= 0.05) | fdr_data.isna()
+
+# --- Create column colors ---
+# Need info for *all* columns in heatmap_data
+col_info = moran_pivot[['dummy_slide_id', 'cyclephase', 'comparison']].drop_duplicates().set_index('dummy_slide_id')
+# Ensure order matches heatmap columns and handle potential missing columns
+heatmap_cols_info = col_info.reindex(heatmap_data.columns)
+
+# 1. Cyclephase colors
+unique_cyclephases = heatmap_cols_info['cyclephase'].dropna().unique()
+palette_cycle = sns.color_palette("husl", len(unique_cyclephases))
+cyclephase_color_map = dict(zip(unique_cyclephases, palette_cycle))
+cyclephase_colors = heatmap_cols_info['cyclephase'].map(cyclephase_color_map)
+
+# 2. Comparison colors
+unique_comparisons = heatmap_cols_info['comparison'].dropna().unique()
+palette_comp = sns.color_palette("Set2", len(unique_comparisons))
+comparison_color_map = dict(zip(unique_comparisons, palette_comp))
+comparison_colors = heatmap_cols_info['comparison'].map(comparison_color_map)
+
+# Combine into a DataFrame for clustermap
+# Providing a DataFrame to col_colors automatically triggers legend creation by seaborn
+col_colors_df = pd.DataFrame({
+  'Cycle Phase': cyclephase_colors,
+  'Projection dataset': comparison_colors
+})
+col_colors_df.index = heatmap_data.columns # Ensure index matches heatmap columns
+
+# Generate clustermap
+g = sns.clustermap(
+  heatmap_data.fillna(0), # Pass data with NaNs and significant/non-significant values
+  mask=mask, # Pass the mask to hide non-significant values (where mask is True)
+  row_cluster=True,
+  col_cluster=True,
+  col_colors=col_colors_df, # Pass the DataFrame with multiple annotations
+  cmap="magma", # Or a diverging map like "vlag" if center is not None
+  cbar_pos=(0.02, .82, .05, .16), # Adjust colorbar position
+  figsize=(9, 9) # Adjust figsize if legends are cramped or cut off
 )
 
-# Create the scatter points layer
-points = base.mark_point(filled=True, size=60, opacity=0.8)
+# Create handles for Cycle Phase legend
+cycle_handles = [mpatches.Patch(color=cyclephase_color_map[name], label=name) for name in unique_cyclephases]
+# Add the first legend - Position relative to the FIGURE edge
+legend1 = g.fig.legend(handles=cycle_handles, title='Cycle Phase', bbox_to_anchor=(0.78, 1), loc='upper left', borderaxespad=0.)
 
-# Create the line layer connecting points within each celltype per facet
-lines = base.mark_line(opacity=0.2).encode(
-  order='Moran I' # Connect points based on Moran I value
-)
+# Create handles for Projection dataset legend
+comp_handles = [mpatches.Patch(color=comparison_color_map[name], label=name) for name in unique_comparisons]
+# Add the second legend - Position below the first one
+legend2 = g.fig.legend(handles=comp_handles, title='Projection dataset', bbox_to_anchor=(0.78, 0.92), loc='upper left', borderaxespad=0.)
 
-# Create the horizontal rule layer at y=0.05
-# This layer doesn't need the main dataframe
-rule = alt.Chart().mark_rule(color='lightgrey', strokeDash=[5,5], opacity=0.2).encode(
-  y=alt.datum(0.05)
-)
-
-# Layer the chart elements: rule first (bottom), then lines, then points
-chart_layers = rule + lines + points
-
-# Apply faceting
-# *** Explicitly pass the data to the facet method ***
-morans_chart = chart_layers.facet(
-  data=moran_pivot,
-  column=alt.Column('lineage:O', header=alt.Header(titleOrient="top", labelOrient="top"), title=None), # Facet by lineage
-  columns=3 # Specify number of columns for wrapping
-).resolve_scale(
-  x='independent', # Don't share x-axis scale/limits
-  color='independent' # Don't share color scale/limits
-).properties(
-  title=alt.TitleParams(
-    text=f'{metric_to_plot}: EV vs REF & BIO vs REF',
-    anchor='middle'
-  )
-)
-
-# To display in a Jupyter environment:
-morans_chart.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
+plt.suptitle("Clustered Heatmap of Significant Moran's I (FDR < 0.05)", y=1.02) # Add title
+plt.show() # Display the plot
 ```
 
 :::
@@ -1438,12 +1456,12 @@ morans_chart.interactive() # Enable zooming and panning and tooltips and selecti
 
 ```{python}
 # Try to make a layout plot with the spacers placeholder image
-raw_st_example = spacer_with_text(height=550, width=400)
-projection_example = spacer_with_text(height=550, width=400)
-(
-  (raw_st_example & projection_example) |
-  (boxplots & corr_plots & morans_chart)
-)
+# raw_st_example = spacer_with_text(height=550, width=400)
+# projection_example = spacer_with_text(height=550, width=400)
+# (
+#   (raw_st_example & projection_example) |
+#   (boxplots & corr_plots)
+# )
 ```
 
 
