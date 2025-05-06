@@ -10,6 +10,14 @@ from pathlib import Path
 from os import getenv
 from dotenv import load_dotenv
 
+## set the random seed for torch and others
+RANDO_SEED = 13
+import torch
+torch.manual_seed(RANDO_SEED)
+import random
+random.seed(RANDO_SEED)
+np.random.seed(RANDO_SEED)
+
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -105,7 +113,7 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 # you have to run this to set the model_obj.cell_target_sum
 # and not run the single_preprocess_lazy() as it seems to override cell_num attribute and does needless normalisation
-_ = model_obj.predicted_fraction(**frac_params)
+_ = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 model_obj.bulk_preprocess_lazy()
 model_obj.train(
   vae_save_dir=Path(model_folder).expanduser() / "pseudosc_model",
@@ -145,7 +153,7 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat.to_memory(),
   **model_params
 )
-_ = model_obj.predicted_fraction(**frac_params) # you have to run this to set the model_obj.cell_target_sum
+_ = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED) # you have to run this to set the model_obj.cell_target_sum
 model_obj.bulk_preprocess_lazy()
 model_obj.train(
   vae_save_dir=Path(model_folder).expanduser() / "pseudosc_model",
@@ -209,11 +217,11 @@ for vis_fold in slides_path.iterdir():
     model_obj = ov.space.Tangram(gen_ccht_ev.to_memory(), vis_dat, clusters="celltype")
     try:
       empty_cache()
-      model_obj.train(mode="cells", num_epochs=500, device="cuda")
+      model_obj.train(mode="cells", num_epochs=500, device="cuda", random_state=RANDO_SEED)
     except OutOfMemoryError as e:
       print(f"CUDA ran out of memory: {e}")
       print("Falling back to CPU training.")
-      model_obj.train(mode="cells", num_epochs=500, device="cpu")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu", random_state=RANDO_SEED)
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj
@@ -223,11 +231,11 @@ for vis_fold in slides_path.iterdir():
     model_obj = ov.space.Tangram(gen_ccht_bio.to_memory(), vis_dat, clusters="celltype")
     try:
       empty_cache()
-      model_obj.train(mode="cells", num_epochs=500, device="cuda")
+      model_obj.train(mode="cells", num_epochs=500, device="cuda", random_state=RANDO_SEED)
     except OutOfMemoryError as e:
       print(f"CUDA ran out of memory: {e}")
       print("Falling back to CPU training.")
-      model_obj.train(mode="cells", num_epochs=500, device="cpu")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu", random_state=RANDO_SEED)
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj
@@ -237,11 +245,11 @@ for vis_fold in slides_path.iterdir():
     model_obj = ov.space.Tangram(sc_dat.to_memory(), vis_dat, clusters="celltype")
     try:
       empty_cache()
-      model_obj.train(mode="cells", num_epochs=500, device="cuda")
+      model_obj.train(mode="cells", num_epochs=500, device="cuda", random_state=RANDO_SEED)
     except OutOfMemoryError as e:
       print(f"CUDA ran out of memory: {e}")
       print("Falling back to CPU training.")
-      model_obj.train(mode="cells", num_epochs=500, device="cpu")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu", random_state=RANDO_SEED)
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj

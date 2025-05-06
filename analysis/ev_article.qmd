@@ -185,10 +185,6 @@ stats_df = pd.read_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
 
 ## Pre-processing pipeline for the RNA-seq data
 
-Raw sequencing reads underwent preprocessing utilizing the nf-core/rnaseq pipeline (v3.14) [[Ewels et al](10.5281/zenodo.1400710)]. This process involved initial read trimming with Trim Galore! (v0.6.10) to remove adapter sequences and low-quality bases. Subsequently, the trimmed reads were aligned to the GRCh37.p13 reference genome, selected for its compatibility with previously published datasets, using the STAR aligner (v2.7.10a) [STAR](10.1093/bioinformatics/bts635). Following alignment, gene expression levels were quantified from the mapped reads employing the RSEM algorithm (v1.3.3) [RSEM](10.1186/1471-2105-12-323). Additionally, mapped reads were assigned to genomic features using [featureCounts](https://academic.oup.com/bioinformatics/article/30/7/923/232889?login=true) (v2.0.3). Both transcripts-per-million (TPM) and raw reads were used in downstream analysiss. The raw read counts were used for differential expression analysis, while the TPM values were employed for visualisation purposes.
-
-Most of the preprocessing, statistical testing and visualisation was performed with Python (v3.9 for preprocessing and v3.11 for analysis and visualisation) programming language. The HECA dataset was normalized using the `preprocess` function from the `omicsverse` (v1.6.7) package with the command `ov.pp.preprocess(sc_dat, mode="pearson|pearson", n_HVGs=3000)`. This process applied Pearson residual normalization, selected the top 3000 highly variable genes (HVGs), and log-transformed the data. Pearson residuals were chosen due to their strong performance in a recent benchmarking study [[Ahlmann-Eltze & Huber, 2023](https://www.nature.com/articles/s41592-023-01814-1)]. No additional cell filtering was performed, as quality control was previously conducted by [Mareckova et al. (2023)](https://doi.org/10.1101/2023.11.03.564728). The resulting log-transformed data was used for downstream analysis, where scaling, dimensionality reduction with PCA and UMAP and calculating a neighborhood graph of observations using the [`scanpy` (v1.11.1) suite of analytical tools](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-017-1382-0). We combined the annotation for the celltypes from the main HECA dataset and the immune cell subtypes from the immune cell atlas. Due to the low number of representative cells in some rare subtypes, we merged them into broader categories. Specifically, 'uNK1', 'uNK1_cycling', 'uNK2', 'uNK3', 'ILC3', 'Peripheral_lymphocyte', 'Lymphatic', and 'Immune_Lymphoid' were grouped into 'Lymphatic'; 'eM1', 'eM2', 'cDC1', 'cDC2', 'pDC', 'Monocyte', and 'Immune_Myeloid' were grouped into 'Myeloid'; 'B_cell' and 'Plasma_B_cell' were grouped into 'B-cells'; and 'T_Reg', 'T_cell_CD8', 'T_cell_CD4', and 'T_cell_cycling' were grouped into 'T-cells'.
-
 ```{bash}
 #| code-fold: false
 #| eval: false
@@ -207,7 +203,7 @@ nextflow run nf-core/rnaseq \
 
 ## Differential expression analysis
 
->Not used currently in the report, but left in for future reference.
+>Not used currently in the report, but left in here for future reference.
 
 Differential expression (DE) analysis was done in R (v4.3) programming language. For differential analysis, we used both DESeq2 and limma-voom algorithms to measure the differences between gene expression levels in different sample groups and to perform statistical testing on the gene-wise differences [[DESeq2](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-014-0550-8), [limma-voom](https://genomebiology.biomedcentral.com/articles/10.1186/gb-2014-15-2-r29)]. While DESeq2 DE results were used for downstream analysis, we used the limma-voom toolset as an alternative approach as it has been shown to have more stringent multiple hypothesis testing in regards to type I error [[Robles et al.](https://link.springer.com/article/10.1186/1471-2164-13-484), [Soneson et al.](https://link.springer.com/article/10.1186/1471-2105-14-91)].
 
@@ -246,20 +242,15 @@ raw_mat <-
 
 > The patient selection criteria is missing. @Elina or @Andres to provide the details.
 
-Sample quality control (QC) procedures were performed to identify and exclude outlier samples prior to downstream analysis. Exclusion criteria were based on sample clustering characteristics and read count metrics. Based on these criteria, seven samples were excluded, and one sample was reassigned. Samples were removed if identified as distinct outliers or exhibited inconsistent clustering with other samples from their assigned experimental group following Uniform Manifold Approximation and Projection (UMAP) dimensionality reduction (Supplementary Figures). Furthermore, inter-sample correlation based on all detected genes was calculated; samples demonstrating low correlation with replicates within their group and clustering separately via hierarchical clustering were excluded (Supplementary Figures). Additionally, samples exhibiting low mRNA read content, defined as less than 5% of total reads mapping to miRNA features according to featureCounts, were removed, as this potentially indicated issues with input material quantity, particularly noted in vesicle samples. Three technical replicates were included for each sequencing batch associated with biopsy samples. These replicates demonstrated high inter-sample correlation (Spearman's ρ > X.XX [placeholder: insert value]), but two out of three were excluded from downstream analysis to reduce sample-specific bias. Finally, based on clustering, one paired UF sample was switched with its corresponding pair.
+TODO:
 
-
-## Spatial transcriptomic deconvolution and projection
-
-Visium slides were acquired from [Garcia-Alonso et al.](https://www.nature.com/articles/s41588-021-00972-2) and the ENA repository [E-MTAB-9260](https://www.ebi.ac.uk/biostudies/arrayexpress/studies/E-MTAB-9260). Preprocessing for the spatial analysis was performed using the Omicsverse `ov.pp.preprocess()` function with the following parameters: `mode="pearson|pearson"`, `n_HVGs=3000`, `log=True`, and `scale=True`. We selected the early-secretory samples (slide IDs 152807 and 152811) as the main focus of the analysis due to their relevance to endometrial receptivity. We project the single-cell datasets generated from the bulk RNA-seq samples of either EV, biopsy or scRNA-seq directly onto the Spatial Transcriptomic Visium slides using a combined [Tangram](https://www.nature.com/articles/s41592-021-01264-7) (v1.0.4) and [cell2location](https://doi.org/10.1038/s41587-021-01139-4) (v0.1.4) approach with default parameters. Tangram, a deep learning method, learns the spatial distribution of cell types from single-cell data and applies this to the spatial transcriptomic data. Cell2location, a probabilistic model, infers cell type abundance in each spatial spot. The combination of these methods allows us to generate a high-resolution spatial map of cell types within the tissue.
+* rerun featureCounts with the new sample names and add the new featureCounts table to the report.
+* filter out featureCounts samples with less than 5% mRNA reads and report the number of samples.
+* run correlation for the technical replicates of HUT71.
 
 ## Deconvolutional model parameters
 
 >Create supplementary figures visualising the training loss and the model performance.
-
-The [TAPE](https://www.nature.com/articles/s41467-022-34550-9) deconvolution model was configured using several key parameters for optimal performance in this study. We trained the model using the [HECAv2](https://doi.org/10.1101/2023.11.03.564728) endometrial cell atlas, as described before. To focus the model on the most informative features, the top 250 marker genes were selected (`top_marker_num=250`). For computational efficiency, the maximum number of single cells used for training was set to one-eighth of the total available single-cell profiles (`max_single_cells = round(len(sc_dat.obs.index) / 8)`). Although initial loss plot analysis suggested convergence around 500 epochs, the training was extended to 1000 epochs (`epochs=1000`) to potentially enhance the accuracy of cell type representation, as indicated by supplementary figures visualising training loss. The StandardScaler (`scaler="ss"`) was chosen for data scaling to better harmonise feature distributions. Furthermore, the model was run in "high-resolution" mode (`mode="high-resolution"`), which integrates a Variational Autoencoder (VAE) component for improved cell type inference. The `ratio_num` parameter, influencing synthetic bulk sample generation, was set to one.
-
-Due to the generational nature of the model, the trained deconvolution model was used to generate pseudo-single-cell (pSC) data from the bulk samples. This process involved the generation of synthetic single-cell profiles from the bulk RNA-seq data, one pSC dataset per bulk data type. All the bulk and biopsy samples were used for training the model, and the pSC data was generated using the same parameters as the training. The pSC data was then preprocessed the same way as the original scRNA-seq atlas by normalisation, scaling, dimensionality reduction, calculating a neighborhood graph of observations and finally visalised (Fig 5).
 
 ```{python}
 #| code-fold: false
@@ -282,10 +273,6 @@ frac_params = {
   "mode": "high-resolution" # for using VAE's for cell type inference
 }
 ```
-
-## Spatial clustering and deconvolution statistics
-
-Projection of bulk RNA-seq data onto spatial coordinates was performed using the bulk2space method on two histological slides of early-secretory tissue. The accuracy of the resulting spatial cell type mapping was assessed by comparison against reference single-cell RNA sequencing (scRNA-seq) data using multiple metrics. These included the Mean Absolute Difference (MAD), calculated as the mean of absolute differences in cell type abundance between projected and reference data; the Centroid Distance (CD), representing the distance between the centroids of the projected and reference cell type spatial distributions; and the Jaccard Index (JI). For JI computation, spots were assigned to the cell type exhibiting the maximum projected abundance, followed by calculation of the intersection over union with the reference cell type assignments. Additionally, spatial clustering was performed independently on each projected slide to evaluate consistency. The statistical significance and spatial autocorrelation of the resulting cell type clusters were assessed using Moran’s I test.
 
 # Results with Figures
 
@@ -332,10 +319,6 @@ barplot_sc_sum = alt.Chart(
 
 (barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent")
 ```
-
-### TODO: Clustering distances of the samples? {.unnumbered .unlisted}
-
-Or maybe a small heatmap with the sample list on the bottom and the Mahalanobis distances in UMAP, PCA and just non-dim-reduction mah distances from the mean groups of cycle phases. Show the closest group and how far is it in scale invariate units as a heatmap.
 
 ### Feature Counts {.unnumbered .unlisted}
 
@@ -823,7 +806,7 @@ final_chart
 
 ### Volcano plot with the difference in deconvolution profiles {.unnumbered .unlisted}
 
-Here we transform the 
+Here we transform the deconvolution profiles into a volcano plot, where we show the differences in the proportions of the cell types between the biopsy and UF samples.
 
 ```{python}
 ## calculate the diffs
@@ -1445,18 +1428,3 @@ projection_example = spacer_with_text(height=550, width=400)
   (boxplots & corr_plots & morans_chart)
 )
 ```
-
-
-# Discussion
-
-The results of the deconvolution and the spatial projections show that the deconvolution method is able to accurately predict the cell type abundances in the tissue samples. The dendrogram and barplot show that the deconvolution profiles are consistent across different samples, and the correlation heatmap shows that the deconvolution profiles are highly correlated with each other. The PCA plots show that the deconvolution profiles are able to separate the different samples based on their cell type abundances, and the spatial projections show that the deconvolution profiles are able to accurately predict the cell type abundances in the tissue samples.
-
-The results of the Moran's I analysis show that the deconvolution profiles are spatially autocorrelated, indicating that the cell type abundances are not randomly distributed in the tissue samples. The FDR analysis shows that the Moran's I values are significant, indicating that the deconvolution profiles are able to accurately predict the cell type abundances in the tissue samples.
-
-
-Weaknesses and improvements:
-
-* We assume that the cell type abundances in the tissue samples are the same as the cell type abundances in the EVs, which may not be true. Further work is needed to validate this assumption.
-* Further work is needed to benchmark VAE models against other deconvolution methods, such as CIBERSORTx and MuSiC.
-* The deconvolution method is not able to accurately predict the cell type abundances in all samples, and further work is needed to improve the accuracy of the deconvolution method.
-* This study only focuses on the mRNA of the EVs, and further work could be done to detect the origin of EV's based on the protein content of the EVs, the surface markers of the EVs, or the lipid content of the EVs.

@@ -1,8 +1,9 @@
-## Please don't look here, its ugly :(
-## but run this on a gpu node with the endo_ev_preproc environment
-
-
 # %% Setup and load some preliminaries
+
+## NB! run this on a gpu node with the endo_ev_preproc environment
+# theres a conflict with the torch version and the omicverse version
+# so we have endo_ev and endo_ev_preproc environments separately
+
 import pandas as pd
 import scanpy as sc
 import omicverse as ov
@@ -11,6 +12,15 @@ import numpy as np
 from pathlib import Path
 from os import getenv
 from dotenv import load_dotenv
+
+## set the random seed for torch
+RANDO_SEED = 13
+import torch
+torch.manual_seed(RANDO_SEED)
+import random
+random.seed(RANDO_SEED)
+np.random.seed(RANDO_SEED)
+
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -42,7 +52,8 @@ replace_immu = {
   "Lymphatic": ["uNK1", "uNK1_cycling", "uNK2", "uNK3", "ILC3", "Peripheral_lymphocyte", "Lymphatic", "Immune_Lymphoid"],
   "Myeloid": ["eM1", "eM2", "cDC1", "cDC2", "pDC", "Monocyte", "Immune_Myeloid"],
   "B-cells": ["B_cell", "Plasma_B_cell"],
-  "T-cells": ["T_Reg", "T_cell_CD8", "T_cell_CD4", "T_cell_cycling"]
+  "T-cells": ["T_Reg", "T_cell_CD8", "T_cell_CD4", "T_cell_cycling"],
+  "Glandular_secretory": ["Glandular_secretory_FGF7"] # also replace the FGF7 cells
 }
 inv_replace_immu = {value: key for key, values in replace_immu.items() for value in values}
 cyclephase_to_include = ["LS", "LP", "EP", "ES", "MS", "Menstrual"]
@@ -219,8 +230,13 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat,
   **model_params
 )
-frac_pred = model_obj.predicted_fraction(**frac_params)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep="\t")
+
+## quick check of the model reproducibility with the seed
+# frac_pred_old = frac_pred.copy()
+# frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
+# print(np.subtract(frac_pred, frac_pred_old))
 
 ## process the combined raw counts
 fractions_file = fractions_folder / "comb_fracs_raw.tsv"
@@ -229,7 +245,7 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat,
   **model_params
 )
-frac_pred = model_obj.predicted_fraction(**frac_params)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep="\t")
 
 # subset only uf samples
@@ -239,7 +255,7 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat,
   **model_params
 )
-frac_tmp = model_obj.predicted_fraction(**frac_params)
+frac_tmp = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_tmp.to_csv(fractions_file, sep="\t")
 
 ## process only the non-batch-corrected ccht UF and biopsy samples
@@ -250,7 +266,7 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat,
   **model_params
 )
-frac_pred = model_obj.predicted_fraction(**frac_params)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
 
 ## the SCRaTCH RIF dataset
@@ -260,7 +276,7 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat,
   **model_params
 )
-frac_pred = model_obj.predicted_fraction(**frac_params)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
 
 ## the clinical CCHT EV samples
@@ -270,5 +286,5 @@ model_obj = ov.bulk2single.Bulk2Single(
   single_data=sc_dat,
   **model_params
 )
-frac_pred = model_obj.predicted_fraction(**frac_params)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
