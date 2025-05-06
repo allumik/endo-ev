@@ -1439,30 +1439,6 @@ plt.show() # Display the plot
 
 ```{python}
 # Try to make a layout plot with the spacers placeholder image
-<<<<<<< HEAD
-# raw_st_example = spacer_with_text(height=550, width=400)
-# projection_example = spacer_with_text(height=550, width=400)
-# (
-#   (raw_st_example & projection_example) |
-#   (boxplots & corr_plots)
-# )
-```
-
-
-# Discussion
-
-The results of the deconvolution and the spatial projections show that the deconvolution method is able to accurately predict the cell type abundances in the tissue samples. The dendrogram and barplot show that the deconvolution profiles are consistent across different samples, and the correlation heatmap shows that the deconvolution profiles are highly correlated with each other. The PCA plots show that the deconvolution profiles are able to separate the different samples based on their cell type abundances, and the spatial projections show that the deconvolution profiles are able to accurately predict the cell type abundances in the tissue samples.
-
-The results of the Moran's I analysis show that the deconvolution profiles are spatially autocorrelated, indicating that the cell type abundances are not randomly distributed in the tissue samples. The FDR analysis shows that the Moran's I values are significant, indicating that the deconvolution profiles are able to accurately predict the cell type abundances in the tissue samples.
-
-
-Weaknesses and improvements:
-
-* We assume that the cell type abundances in the tissue samples are the same as the cell type abundances in the EVs, which may not be true. Further work is needed to validate this assumption.
-* Further work is needed to benchmark VAE models against other deconvolution methods, such as CIBERSORTx and MuSiC.
-* The deconvolution method is not able to accurately predict the cell type abundances in all samples, and further work is needed to improve the accuracy of the deconvolution method.
-* This study only focuses on the mRNA of the EVs, and further work could be done to detect the origin of EV's based on the protein content of the EVs, the surface markers of the EVs, or the lipid content of the EVs.
-=======
 raw_st_example = spacer_with_text(height=550, width=400)
 projection_example = spacer_with_text(height=550, width=400)
 (
@@ -1470,4 +1446,3 @@ projection_example = spacer_with_text(height=550, width=400)
   (boxplots & corr_plots & morans_chart)
 )
 ```
->>>>>>> refs/remotes/origin/master
