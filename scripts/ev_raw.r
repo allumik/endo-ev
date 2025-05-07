@@ -68,7 +68,7 @@ pheno <-
 #### FILTER
 # HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
 # HUT10 does not have a paired biopsy sample
-# HUT71, HUT53, HUT17 were excluded due to low biotype proportion
+# HUT33, HUT53, HUT17 were excluded due to low biotype proportion
 # HUT23_UF was swapped with HUT23_biopsy based on clustering
 removals <- c(
   "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",

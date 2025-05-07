@@ -233,22 +233,15 @@ The following code is an excerpt from the `ev_raw.r` script, describing the main
 #| eval: false
 #| echo: true
 #### FILTER
+# HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
+# HUT10 does not have a paired biopsy sample
+# HUT33, HUT53, HUT17 were excluded due to low biotype proportion
 removals <- c(
   "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", #"HUT35_UF", "HUT42_UF",
+  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT33_UF", "HUT33_biopsy",
   "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
 )
-
-# switch and filter some samples
-raw_mat <-
-  raw_mat %>%
-  rename(
-    ## this takes too much time to figure out how to switch by sample codes
-    ## just switch manually
-    HUT23_biopsy = HUT23_UF,
-    HUT23_UF = HUT23_biopsy
-  ) %>%
-  select(-removals[removals %in% colnames(raw_mat)])
+# HUT23_UF was swapped with HUT23_biopsy based on clustering
 ```
 
 > The patient selection criteria is missing. @Elina or @Andres to provide the details.
@@ -1519,14 +1512,14 @@ umap_plot_unfilt = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
   tooltip=['samplename', 'cyclephase', 'group']
 ).properties(
   title='UMAP of unfiltered samples',
-  width=200,
-  height=200
+  width=250,
+  height=250
 )
 ```
 
 ```{python}
 # Prepare data for UMAP
-data_for_umap = ccht_uf_raw.T  # Transpose so samples are rows
+data_for_umap = ccht_uf_tpm.T  # Transpose so samples are rows
 
 # Perform UMAP
 reducer = UMAP(random_state=42, n_neighbors=10, min_dist=0.5) # Use UMAP directly
@@ -1545,8 +1538,8 @@ umap_plot = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
   tooltip=['samplename', 'cyclephase', 'group']
 ).properties(
   title='UMAP of filtered samples',
-  width=200,
-  height=200
+  width=250,
+  height=250
 )
 ```
 
@@ -1667,7 +1660,7 @@ base_chart = alt.Chart(df_melted).mark_bar().encode(
   order=alt.Order('color_biotype_sort_index:Q') # sort by the color fields
 ).properties(
   height=alt.Step(12), # Adjust bar width by setting step
-  width=200,
+  width=250,
   title="Biotype Proportions per Sample (Unfiltered, Top 10 Biotypes)"
 )
 
@@ -1676,7 +1669,20 @@ rule = alt.Chart(pd.DataFrame({'percentage': [0.9]})).mark_rule(strokeDash=[5, 5
   x=alt.X('percentage:Q')
 )
 
-(base_chart + rule).interactive()
+biotype_prop = (base_chart + rule)
+biotype_prop.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
+```
+
+Lower half of the plot
+
+```{python}
+supp_1 = (
+  biotype_prop | (umap_plot_unfilt & umap_plot) 
+  ).resolve_scale(
+    x="independent", y="independent", color="independent", shape="independent"
+    )
+
+supp_1.interactive()
 ```
 
 :::
