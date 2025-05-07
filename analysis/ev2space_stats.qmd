@@ -1,7 +1,5 @@
 ---
 title: "Single cell perspective into Extracellular Vesicules projected onto Spatial Transcriptomics"
-execute:
-  keep-ipynb: true
 format:
   html:
     code-fold: true

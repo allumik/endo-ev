@@ -46,6 +46,7 @@ from dotenv import load_dotenv
 from IPython.display import HTML
 from sklearn.decomposition import PCA
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from umap import UMAP # Changed import style
 from sklearn.preprocessing import normalize
 
 ## import the functions used in this report (got too long to include them in the report)
@@ -70,11 +71,15 @@ raw_data_folder = getenv("RAW_DATA_FOLDER")
 
 # some other dataset locations
 snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
-ccht_data_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw.feather"
 comb_data_loc = Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather"
 comb_raw_data_loc = Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather"
-ccht_pheno_loc = Path(data_folder).expanduser() / "filtered" / "phenotype.tsv"
 comb_pheno_loc = Path(data_folder).expanduser() / "combined" / "comb_all_pheno.tsv"
+ccht_data_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw.feather"
+ccht_tpm_loc = Path(data_folder).expanduser() / "filtered" / "annot_tpm.feather"
+ccht_data_unfilt_loc = Path(data_folder).expanduser() / "filtered" / "annot_raw_unfilt.feather"
+ccht_tpm_unfilt_loc = Path(data_folder).expanduser() / "filtered" / "annot_tpm_unfilt.feather"
+ccht_pheno_loc = Path(data_folder).expanduser() / "filtered" / "phenotype.tsv"
+ccht_pheno_unfilt_loc = Path(data_folder).expanduser() / "filtered" / "phenotype_unfilt.tsv"
 fractions_folder = Path(data_folder) / "tape_fractions"
 fractions_file_loc = fractions_folder / "ccht_fracs.tsv"
 fractions_file_loc_comb = fractions_folder / "comb_uf_fracs.tsv"
@@ -96,13 +101,20 @@ Load in the datasets:
 sc_dat = an.read_h5ad(snapshot_an_loc)
 
 ## load in the EV CCHT only data
-terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"] # some samples to exclude
+terminator = [] # some samples to exclude
 ccht_uf_raw = pd.read_feather(ccht_data_loc).set_index("gene_id").iloc[:-1]
+ccht_uf_tpm = pd.read_feather(ccht_tpm_loc).set_index("gene_id").iloc[:-1]
 ccht_uf_pheno = pd.read_table(ccht_pheno_loc).set_index("samplename").assign(
     cyclephase=lambda x: 
       pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
     )
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator and samplename in @ccht_uf_raw.columns")
+ccht_uf_unfilt_raw = pd.read_feather(ccht_data_unfilt_loc).set_index("gene_id").iloc[:-1]
+ccht_uf_unfilt_tpm = pd.read_feather(ccht_tpm_unfilt_loc).set_index("gene_id").iloc[:-1]
+ccht_uf_pheno_unfilt = pd.read_table(ccht_pheno_unfilt_loc).set_index("samplename").assign(
+    cyclephase=lambda x: 
+      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
+    )
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
 
 ## load in the EV combined dataset phenotype for the fractions
@@ -149,10 +161,10 @@ And the featurecounts results for the samples from the MultiQC report.
 ```{python}
 features_ev = (
   pd.read_table(
-    Path(raw_data_folder) / "multiqc_star_rsem/multiqc_data/multiqc_featurecounts_biotype_plot.txt"
+    Path(raw_data_folder) / "multiqc/star_rsem/multiqc_data/multiqc_featurecounts_biotype_plot.txt"
     )
   .rename(columns={"Sample": "samplename"})
-  .query("samplename in @frac_pred.index")
+  # .query("samplename in @frac_pred.index") # don't filter out  here
   .set_index("samplename")
 )
 ```
@@ -215,9 +227,6 @@ Differential expression (DE) analysis was done in R (v4.3) programming language.
 
 ## Sample selection and quality control
 
-> Related scripts are `scripts/ev_raw.r`, `ev_biomarker.rmd` and `ev_deconvolution.qmd`, with the `ev_raw.r` being the main filtering step and `ev_biomarker.rmd` chapter 1.2 being the main analysis step for filtering criteria.
-> Add plots from 1.1, 1.2.4, 1.2.2, 1.2.3, 1.2.6 and 1.2.7 as supplementary figures, exclude the training samples in figures 1.1 and 1.2.4
-
 The following code is an excerpt from the `ev_raw.r` script, describing the main filtering step:
 ```{r}
 #| code-fold: false
@@ -225,8 +234,9 @@ The following code is an excerpt from the `ev_raw.r` script, describing the main
 #| echo: true
 #### FILTER
 removals <- c(
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT35_UF",
-  "HUT42_UF", "HUT71_biopsy_2", "HUT71_biopsy_3"
+  "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",
+  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", #"HUT35_UF", "HUT42_UF",
+  "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
 )
 
 # switch and filter some samples
@@ -245,8 +255,6 @@ raw_mat <-
 
 TODO:
 
-* rerun featureCounts with the new sample names and add the new featureCounts table to the report.
-* filter out featureCounts samples with less than 5% mRNA reads and report the number of samples.
 * run correlation for the technical replicates of HUT71.
 
 ## Deconvolutional model parameters
@@ -285,8 +293,6 @@ Main points of interest:
 * We observed the featureCounts mRNA ratio to other transcript types to indicate the quality of the samples, especially in the EV samples with lower genomic input.
 * We have also included samples from the late-secretory phase of the menstrual cycle to show the differences in the cell type proportions leading up to the decidualisation of the endometrium.
 
-The deconvolutional model was trained on the HECAv2 dataset, which was then used to generate pseudo-single-cell data from the bulk samples. The pSC data was then projected onto the spatial transcriptomic slides using a combination of Tangram and cell2location methods [cite the methods]. Instead of using more traditional regression based methods for deconvolution, we used generative models to generate pseudo-single-cell data from the bulk samples for both deconvolution and projection to spatial omic data. This approach allows us to generalise the cell type expression profiles and detect those representative profiles in endometrium-derived extracellular vesicles (EVs). Although regression-based methods are more interpretable, they are also more prone to overfitting and can be less robust in the presence of noise or outliers [source? TAPE article?]. Generative models, on the other hand, can capture complex relationships between features as latent representations and can be more resilient to noise, making them a powerful tool for deconvolution tasks for extracellular vesicules. Although recent benchmarking studies have shown that regressional methods can be used successfully for deconvolution of liquid biopsy samples, then it is still unclear how well they perform compared to generative models [[Larsen et al](https://onlinelibrary.wiley.com/doi/abs/10.1002/jev2.12511)]. Therefore, it can be argued that representation based deconvolution methods relax the assumption that RNA molecules in EV's recapituliate only the origin tissue transcriptional profiles. Finally, generative autoencoder models can also be used to generate synthetic single-cell data from bulk samples, which can be subsequently integrated with a spatial transcriptomic dataset to visualise possible origins of the EVs.
-
 ::: {.panel-tabset}
 
 ### Select a tab: {.unnumbered .unlisted}
@@ -318,43 +324,72 @@ barplot_sc_sum = alt.Chart(
   color=alt.Color("dataset:N").legend(orient="bottom", titleOrient="top", columns=2)
 ).properties(width=150, height=225)
 
-(barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent")
+(barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent").interactive()
 ```
 
 ### Feature Counts {.unnumbered .unlisted}
 
-Plot top features per FeatureCounts output on log scale. Show the cutoff point for QC of 5% miRNA reads.
+Here we look at only the final samples that were selected for the analysis, the raw featurecounts table is in Supplementary Fig 1.
+
+Plot 10 top features per FeatureCounts output on log scale. Show the cutoff point for QC of 15% proteion coding RNA reads.
 
 ```{python}
 # Identify biotype columns and calculate total counts
 biotype_cols = features_ev.columns
 biotype_counts = features_ev[biotype_cols].sum().sort_values(ascending=False)
 
-# Get the top 15 biotypes
-top_biotypes = biotype_counts.head(15).index.tolist()
+# Get the top 10 biotypes
+top_biotypes = biotype_counts.head(10).index.tolist()
+# Calculate total counts per sample for the initially selected top_biotypes
+sample_totals = features_ev[top_biotypes].sum(axis=1)
 
-# Melt the DataFrame for plotting, including only the top 5 biotypes
+# Melt the DataFrame for plotting, including only the top biotypes
 df_melted = (
   features_ev
   .reset_index()
+  .query("samplename in @frac_pred.index")
   .melt(id_vars=['samplename'], value_vars=top_biotypes, var_name='biotype', value_name='count')
+)
+
+# Calculate percentage relative to the sum of these top_biotypes for that sample
+df_melted['percentage'] = df_melted.apply(
+  lambda row: (row['count'] / sample_totals[row['samplename']]) * 100 if sample_totals[row['samplename']] > 0 else 0, 
+  axis=1
 )
 
 # Create a new column for the sample group
 df_melted['sample_group'] = df_melted['samplename'].apply(lambda x: 'biopsy' if 'biopsy' in x else 'UF')
 
-# Create the grouped boxplot
-featurecounts_chart = alt.Chart(df_melted).mark_boxplot(extent=1.5).encode(
-  x=alt.X('biotype:N', title='Biotype', sort=top_biotypes).axis(labelAngle=-30),
-  y=alt.Y('count:Q', title='Count (log)').scale(type="log", nice=True).axis(values=[1e3, 1e4, 1e5, 1e6, 1e7, 1e8]),
-  color=alt.Color('sample_group:N', title='Sample Group').legend(orient="top", titleOrient="left"),
-  xOffset='sample_group:N',
-  tooltip=['samplename', 'biotype', 'count', 'sample_group'],
-).properties(
-  height=150,
-  width=550
-)
+# --- Plotting logic starts here ---
 
+# Separate data for protein_coding and other biotypes
+df_protein_coding = df_melted[df_melted['biotype'] == 'protein_coding'].copy()
+df_other_biotypes = df_melted[df_melted['biotype'] != 'protein_coding'].copy()
+
+# Define the sort order for other biotypes (maintaining original sort order from top_biotypes)
+# Ensure 'protein_coding' is excluded if it was in top_biotypes
+other_biotypes_sorted_list = [bt for bt in top_biotypes if bt != 'protein_coding']
+
+# Plot for protein_coding
+protein_coding_plot = alt.Chart(df_protein_coding).mark_boxplot(extent=1.5).encode(
+  x=alt.X('biotype:N', title=None).axis(labelAngle=-30),
+  y=alt.Y('percentage:Q', title='Percentage (%)').scale(domain=(80, 100)),
+  color=alt.Color('sample_group:N', title='Sample Group').legend(orient="top", titleOrient="left"),
+  xOffset='sample_group:N'
+).properties(height=150, width=60)
+
+threshold_line = alt.Chart(pd.DataFrame({'y': [90]})).mark_rule(strokeDash=[5,5], color='grey').encode(y='y:Q')
+protein_coding_chart_final = protein_coding_plot + threshold_line
+
+# Plot for other top biotypes
+other_biotypes_plot = alt.Chart(df_other_biotypes).mark_boxplot(extent=1.5).encode(
+  x=alt.X('biotype:N', title='10 Top Biotypes', sort=other_biotypes_sorted_list).axis(labelAngle=-30),
+  y=alt.Y('percentage:Q', title=None), # Independent y-axis scale
+  color=alt.Color('sample_group:N').legend(None), # Hide legend, will be shared
+  xOffset='sample_group:N'
+).properties(height=150, width=450)
+
+featurecounts_chart = protein_coding_chart_final | other_biotypes_plot
 featurecounts_chart.show()
 ```
 
@@ -1438,11 +1473,211 @@ plt.show() # Display the plot
 > As these plots can't be visualised using a single framework (contains both matplotlib and Altair libraries), then these are the subplots that are generated separately and compiled later manually
 
 ```{python}
-# Try to make a layout plot with the spacers placeholder image
-raw_st_example = spacer_with_text(height=550, width=400)
-projection_example = spacer_with_text(height=550, width=400)
-(
-  (raw_st_example & projection_example) |
-  (boxplots & corr_plots & morans_chart)
+# # Try to make a layout plot with the spacers placeholder image
+# raw_st_example = spacer_with_text(height=550, width=400)
+# projection_example = spacer_with_text(height=550, width=400)
+# (
+#   (raw_st_example & projection_example) |
+#   (boxplots & corr_plots & morans_chart)
+# )
+```
+
+
+## SUPP FIG 1: QC and sample selection
+
+We have excluded the following samples with their corresponding pair due to
+
+* HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
+* HUT10 does not have a paired biopsy sample
+* HUT71, HUT53, HUT17 were excluded due to low biotype proportion
+* HUT23_UF was swapped with HUT23_biopsy based on clustering
+
+::: {.panel-tabset}
+
+### Select a tab: {.unnumbered .unlisted}
+
+### UMAP of the unfiltered and filtered samplesets {.unnumbered .unlisted}
+
+```{python}
+# Prepare data for UMAP
+data_for_umap = ccht_uf_unfilt_tpm.T  # Transpose so samples are rows
+
+# Perform UMAP
+reducer = UMAP(random_state=42, n_neighbors=10, min_dist=0.5) # Use UMAP directly
+embedding = reducer.fit_transform(data_for_umap)
+
+# Create DataFrame for plotting
+umap_df = pd.DataFrame(embedding, columns=['UMAP1', 'UMAP2'], index=data_for_umap.index)
+umap_df = umap_df.join(ccht_uf_pheno_unfilt[["cyclephase", "group"]]).reset_index().rename(columns={"index": "samplename"})
+
+# Create Altair plot
+umap_plot_unfilt = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
+  x=alt.X('UMAP1:Q', title='UMAP 1').scale(zero=False),
+  y=alt.Y('UMAP2:Q', title='UMAP 2').scale(zero=False),
+  color=alt.Color('cyclephase:N', title='Cycle Phase'),
+  shape=alt.Shape('group:N', title='Sample Group'),
+  tooltip=['samplename', 'cyclephase', 'group']
+).properties(
+  title='UMAP of unfiltered samples',
+  width=200,
+  height=200
 )
 ```
+
+```{python}
+# Prepare data for UMAP
+data_for_umap = ccht_uf_raw.T  # Transpose so samples are rows
+
+# Perform UMAP
+reducer = UMAP(random_state=42, n_neighbors=10, min_dist=0.5) # Use UMAP directly
+embedding = reducer.fit_transform(data_for_umap)
+
+# Create DataFrame for plotting
+umap_df = pd.DataFrame(embedding, columns=['UMAP1', 'UMAP2'], index=data_for_umap.index)
+umap_df = umap_df.join(ccht_uf_pheno[["cyclephase", "group"]]).reset_index().rename(columns={"index": "samplename"})
+
+# Create Altair plot
+umap_plot = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
+  x=alt.X('UMAP1:Q', title='UMAP 1').scale(zero=False),
+  y=alt.Y('UMAP2:Q', title='UMAP 2').scale(zero=False),
+  color=alt.Color('cyclephase:N', title='Cycle Phase'),
+  shape=alt.Shape('group:N', title='Sample Group'),
+  tooltip=['samplename', 'cyclephase', 'group']
+).properties(
+  title='UMAP of filtered samples',
+  width=200,
+  height=200
+)
+```
+
+Plot the UMAPs side by side
+
+```{python}
+umap_plot_unfilt | umap_plot
+```
+
+### Correlation plot of the unfiltered sampleset {.unnumbered .unlisted}
+
+```{python}
+corr_mat_unfilt = ccht_uf_unfilt_tpm.corr(method='spearman')
+pheno_unfilt_idx = ccht_uf_pheno_unfilt.query("samplename in @corr_mat_unfilt.index")
+
+cyc_unfilt_u = pheno_unfilt_idx['cyclephase'].dropna().unique().tolist()
+cyc_pal_unfilt = sns.color_palette("husl", len(cyc_unfilt_u))
+cyc_map_unfilt = dict(zip(cyc_unfilt_u, cyc_pal_unfilt))
+cyc_cols_unfilt = pd.Series([cyc_map_unfilt.get(phase) for phase in pheno_unfilt_idx['cyclephase']], index=pheno_unfilt_idx.index, name='cyclephase')
+
+grp_unfilt_u = pheno_unfilt_idx['group'].dropna().unique().tolist()
+grp_pal_unfilt = sns.color_palette("Set2", len(grp_unfilt_u))
+grp_map_unfilt = dict(zip(grp_unfilt_u, grp_pal_unfilt))
+grp_cols_unfilt = pd.Series([grp_map_unfilt.get(group) for group in pheno_unfilt_idx['group']], index=pheno_unfilt_idx.index, name='group')
+
+row_colors_df = pd.DataFrame({"": cyc_cols_unfilt, " ": grp_cols_unfilt}, index=corr_mat_unfilt.index)
+
+g_unfilt = sns.clustermap(
+  corr_mat_unfilt.fillna(0), col_colors=row_colors_df, method="complete",
+  cmap="magma", vmin=0, vmax=1, figsize=(6, 8), cbar_pos=(0.85, .82, .02, .16),
+  xticklabels=True, yticklabels=False, dendrogram_ratio=(0, .25)
+)
+
+# Reduce the size of x-axis tick labels
+g_unfilt.ax_heatmap.set_xticklabels(g_unfilt.ax_heatmap.get_xmajorticklabels(), fontsize = 7)
+g_unfilt.ax_heatmap.set_yticklabels(g_unfilt.ax_heatmap.get_ymajorticklabels(), fontsize = 7)
+
+cyc_handles = [mpatches.Patch(color=cyc_map_unfilt[name], label=name) for name in cyc_unfilt_u]
+g_unfilt.fig.legend(handles=cyc_handles, title='Cycle Phase', bbox_to_anchor=(.8, .98), loc='upper right', borderaxespad=0.)
+grp_handles = [mpatches.Patch(color=grp_map_unfilt[name], label=name) for name in grp_unfilt_u]
+g_unfilt.fig.legend(handles=grp_handles, title='Sample Group', bbox_to_anchor=(.6, .98), loc='upper right', borderaxespad=0.)
+g_unfilt.fig.suptitle("Correlation Heatmap of Unfiltered Samples (Spearman)", y=1.02)
+plt.show()
+```
+
+### Correlation plot of the raw reads {.unnumbered .unlisted}
+
+```{python}
+corr_mat = ccht_uf_tpm.corr(method='spearman')
+pheno = ccht_uf_pheno.query("samplename in @corr_mat.index")
+
+cyc = pheno['cyclephase'].dropna().unique().tolist()
+cyc_pal = sns.color_palette("husl", len(cyc))
+cyc_map = dict(zip(cyc, cyc_pal))
+cyc_cols = pd.Series([cyc_map.get(phase) for phase in pheno['cyclephase']], index=pheno.index, name='cyclephase')
+
+grp = pheno['group'].dropna().unique().tolist()
+grp_pal = sns.color_palette("Set2", len(grp))
+grp_map = dict(zip(grp, grp_pal))
+grp_cols = pd.Series([grp_map.get(group) for group in pheno['group']], index=pheno.index, name='group')
+
+row_colors_df = pd.DataFrame({"": cyc_cols, " ": grp_cols}, index=corr_mat.index)
+
+g = sns.clustermap(
+  corr_mat.fillna(0), col_colors=row_colors_df, method="complete",
+  cmap="magma", vmin=0, vmax=1, figsize=(6,8), cbar_pos=(0.85, .82, .02, .16),
+  xticklabels=True, yticklabels=False, dendrogram_ratio=(0, .25)
+)
+
+# Reduce the size of x-axis tick labels
+g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), fontsize = 7)
+g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_ymajorticklabels(), fontsize = 7)
+
+cyc_handles = [mpatches.Patch(color=cyc_map[name], label=name) for name in cyc]
+g.fig.legend(handles=cyc_handles, title='Cycle Phase', bbox_to_anchor=(.8, .98), loc='upper right', borderaxespad=0.)
+grp_handles = [mpatches.Patch(color=grp_map[name], label=name) for name in grp]
+g.fig.legend(handles=grp_handles, title='Sample Group', bbox_to_anchor=(.6, .98), loc='upper right', borderaxespad=0.)
+g.fig.suptitle("Correlation Heatmap of TPM counts (Spearman)", y=1.02)
+```
+
+### Featurecounts plot too for unfiltered groups {.unnumbered .unlisted}
+
+```{python}
+# Calculate total counts for each biotype across all samples
+biotype_counts = features_ev.sum().sort_values(ascending=False)
+
+# Get the top 10 biotypes
+top_biotypes = biotype_counts.head(10).index.tolist()
+
+# Calculate total counts per sample for the selected top_biotypes (denominator for percentage)
+sample_totals_top_biotypes = features_ev[top_biotypes].sum(axis=1)
+
+# Melt the DataFrame for plotting, including only the top biotypes
+df_melted = (
+  features_ev
+  .reset_index()
+  .pipe(lambda df: df[df['samplename'].str.contains("HUT", na=False)])
+  .melt(id_vars=['samplename'], value_vars=top_biotypes, var_name='biotype', value_name='count')
+)
+
+# Calculate percentage relative to the sum of these top_biotypes for that sample
+df_melted['percentage'] = df_melted.apply(
+  lambda row: (row['count'] / sample_totals_top_biotypes[row['samplename']])
+  if sample_totals_top_biotypes[row['samplename']] > 0 else 0,
+  axis=1
+)
+
+# Sort samples by the percentage of "protein_coding" if it's in top_biotypes
+# If not, sample_order will be empty, and Altair will use default order.
+protein_coding_percentages = df_melted[df_melted['biotype'] == 'protein_coding'].set_index('samplename')['percentage']
+sample_order = protein_coding_percentages.sort_values(ascending=False).index.tolist()
+
+# --- Plotting logic starts here ---
+base_chart = alt.Chart(df_melted).mark_bar().encode(
+  y=alt.Y('samplename:N', title='Sample', sort=sample_order),
+  x=alt.X('percentage:Q', title='Percentage (%)', scale=alt.Scale(domain=(.8, 1)), axis=alt.Axis(format='%')),
+  color=alt.Color('biotype:N', title='Biotype', sort=top_biotypes, scale=alt.Scale(scheme='category10')),
+  order=alt.Order('color_biotype_sort_index:Q') # sort by the color fields
+).properties(
+  height=alt.Step(12), # Adjust bar width by setting step
+  width=200,
+  title="Biotype Proportions per Sample (Unfiltered, Top 10 Biotypes)"
+)
+
+# Add a rule (line) at y=90%
+rule = alt.Chart(pd.DataFrame({'percentage': [0.9]})).mark_rule(strokeDash=[5, 5], color='red').encode(
+  x=alt.X('percentage:Q')
+)
+
+(base_chart + rule).interactive()
+```
+
+:::
+

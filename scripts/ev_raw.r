@@ -13,14 +13,37 @@ raw_mat <-
   mutate(across(where(is.numeric), ~ as.integer(replace_na(.x, 0)))) %>%
   # remove the corresponding transcript ID's and the Undetermined sample
   select(-"transcript_id(s)") %>%
-  # fix the sample names
   rename_with(
     ~ .x %>%
+      # fix the sample names
       str_replace("HU10", "HUT10") %>%
+      # Remove leading zeros after "HUT" and before a digit
       str_remove("(?<=\\HUT)[0]+(?=\\d)")
   ) %>%
   # fix missing sample names from the added samples
-  rename_with(~ str_c(.x, "_UF"), matches("HUT9|HUT25|HUT29|HUT32|HUT27"))
+  # not added anymore, filtered already before reading in here
+  rename_with(~ str_c(.x, "_UF"), matches("HUT009|HUT25|HUT29|HUT32|HUT27"))
+
+## read in the TPM matrices and fix naming order
+tpm_mat <-
+  read_tsv(
+    paste0(raw_data_folder, "/rsem_matrices/rsem.merged.gene_tpm_deconvo.tsv")
+  ) %>%
+  # set NA's as 0's by default and enforce integers (for compact data format)
+  mutate(across(where(is.numeric), ~ as.integer(replace_na(.x, 0)))) %>%
+  # remove the corresponding transcript ID's and the Undetermined sample
+  select(-"transcript_id(s)") %>%
+  rename_with(
+    ~ .x %>%
+      # fix the sample names
+      str_replace("HU10", "HUT10") %>%
+      # Remove leading zeros after "HUT" and before a digit
+      str_remove("(?<=\\HUT)[0]+(?=\\d)")
+  ) %>%
+  # fix missing sample names from the added samples
+  # not added anymore, filtered already before reading in here
+  rename_with(~ str_c(.x, "_UF"), matches("HUT009|HUT25|HUT29|HUT32|HUT27"))
+
 
 
 ## read in the metadata and consolidate samplenames
@@ -43,12 +66,18 @@ pheno <-
 
 
 #### FILTER
+# HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
+# HUT10 does not have a paired biopsy sample
+# HUT71, HUT53, HUT17 were excluded due to low biotype proportion
+# HUT23_UF was swapped with HUT23_biopsy based on clustering
 removals <- c(
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT35_UF",
-  "HUT42_UF", "HUT71_biopsy_2", "HUT71_biopsy_3"
+  "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",
+  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT33_UF", "HUT33_biopsy",
+  "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
 )
 
 # switch and filter some samples
+raw_mat_unfilt <- raw_mat
 raw_mat <-
   raw_mat %>%
   rename(
@@ -59,6 +88,20 @@ raw_mat <-
   ) %>%
   select(-removals[removals %in% colnames(raw_mat)])
 
+# switch and filter some samples
+tpm_mat_unfilt <- tpm_mat
+tpm_mat <-
+  tpm_mat %>%
+  rename(
+    ## this takes too much time to figure out how to switch programmatically
+    ## just switch manually
+    HUT23_biopsy = HUT23_UF,
+    HUT23_UF = HUT23_biopsy
+  ) %>%
+  select(-removals[removals %in% colnames(tpm_mat)])
+
+
+pheno_unfilt <- pheno
 pheno <-
   pheno %>%
   # but remove an samples actually not in the raw_mat (supposedly 8 of them)
@@ -68,14 +111,20 @@ pheno <-
 
 ## join count matrix with pheno for visualization or downstream analysis
 expr_mat <- raw_mat %>% transform_count_mat(pheno)
+expr_tpm <- tpm_mat %>% transform_count_mat(pheno)
 
 
 #### OUTPUT
 ## Emit formatted data files
 data_subfolder <- paste0(data_folder, "/filtered/")
 raw_mat %>% write_feather(paste0(data_subfolder, "counts_raw.feather"))
+tpm_mat %>% write_feather(paste0(data_subfolder, "tpm_raw.feather"))
+raw_mat_unfilt %>% write_feather(paste0(data_subfolder, "counts_raw_unfilt.feather"))
+tpm_mat_unfilt %>% write_feather(paste0(data_subfolder, "tpm_raw_unfilt.feather"))
 expr_mat %>% write_feather(paste0(data_subfolder, "counts_format.feather"))
+expr_tpm %>% write_feather(paste0(data_subfolder, "tpm_format.feather"))
 pheno %>% write_tsv(paste0(data_subfolder, "phenotype.tsv"))
+pheno_unfilt %>% write_tsv(paste0(data_subfolder, "phenotype_unfilt.tsv"))
 
 ## also write out raw file with switched and formatted annotation
 raw_mat %>%
@@ -83,3 +132,21 @@ raw_mat %>%
   geneid_converter(annot) %>%
   rename(gene_id = external_gene_name) %>%
   write_feather(paste0(data_subfolder, "annot_raw.feather"))
+
+raw_mat_unfilt %>%
+  rename(ensembl_gene_id = gene_id) %>%
+  geneid_converter(annot) %>%
+  rename(gene_id = external_gene_name) %>%
+  write_feather(paste0(data_subfolder, "annot_raw_unfilt.feather"))
+
+tpm_mat %>%
+  rename(ensembl_gene_id = gene_id) %>%
+  geneid_converter(annot) %>%
+  rename(gene_id = external_gene_name) %>%
+  write_feather(paste0(data_subfolder, "annot_tpm.feather"))
+
+tpm_mat_unfilt %>%
+  rename(ensembl_gene_id = gene_id) %>%
+  geneid_converter(annot) %>%
+  rename(gene_id = external_gene_name) %>%
+  write_feather(paste0(data_subfolder, "annot_tpm_unfilt.feather"))

@@ -90,7 +90,8 @@ comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_a
 comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather").set_index("external_gene_name").iloc[:-1]
 comb_uf = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather").set_index("gene_id").iloc[:-1]
 ## filter out some samples
-terminator = ["HUT26_UF", "HUT26_biopsy"]
+# terminator = ["HUT26_UF", "HUT26_biopsy"]
+terminator = []
 comb_all = comb_all.drop(columns=terminator)
 comb_all_raw = comb_all_raw.drop(columns=terminator)
 comb_all_pheno = (
@@ -130,7 +131,8 @@ ccht_uf_pheno = (
       pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
     )
 )
-terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"]
+# terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"]
+terminator = []
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator")
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
 
