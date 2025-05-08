@@ -1,4 +1,10 @@
-# %% Setup and load some preliminaries
+---
+title: "Preprocess and project the spatial transcriptomics data"
+jupyter: python3
+---
+
+## Setup and load some preliminaries
+```{python}
 import pandas as pd
 import scanpy as sc
 import omicverse as ov
@@ -11,7 +17,7 @@ from os import getenv
 from dotenv import load_dotenv
 
 ## set the random seed for torch and others
-RANDO_SEED = 13
+RANDO_SEED = 9
 import torch
 torch.manual_seed(RANDO_SEED)
 import random
@@ -30,16 +36,17 @@ data_folder = getenv("DATA_FOLDER")
 st_folder = getenv("ST_FOLDER")
 model_folder = Path(data_folder).expanduser() / "saved_models"
 raw_data_folder = getenv("RAW_DATA_FOLDER")
+```
 
-# %% load in the preprocessed scRNA-seq dataset in `preproc_sc.py`
-
+## Load in the preprocessed scRNA-seq dataset in `preproc_sc.py`
+```{python}
 ## load in the modified HECA atlas
 snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
 sc_dat = an.read_h5ad(snapshot_an_loc)
+```
 
-
-# %% load in the UF and biopsy bulk datasets
-
+## Load in the UF and biopsy bulk datasets
+```{python}
 ## load in the EV data
 comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather").set_index("gene_id").iloc[:-1]
 comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather").set_index("external_gene_name").iloc[:-1]
@@ -73,10 +80,10 @@ ccht_uf_pheno = (
 # terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"]
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator")
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
+```
 
-
-
-# %% Parameters for the celltype models
+## Parameters for the celltype models
+```{python}
 model_params = {
   "celltype_key": "celltype",
   "top_marker_num": 250, # reduce it from the default parameter of 500
@@ -100,11 +107,10 @@ vae_params = {
   "hidden_size": 256,
   "epoch_num": 100 # looking at loss plot then 500 seems to be already enough
 }
+```
 
-
-
-# %% Run the Projection models
-
+## Run the Projection models
+```{python}
 ## First for the EV samples
 gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
 model_obj = ov.bulk2single.Bulk2Single(
@@ -186,9 +192,10 @@ gen_ccht_bio.write(gen_sc_file)
 # gen_ccht_bio = an.read_h5ad(gen_sc_file, backed="r")
 del model_obj
 empty_cache()
+```
 
-
-# %% Preprocess and project on the spatial slides
+## Preprocess and project on the spatial slides
+```{python}
 slides_path = Path(st_folder).expanduser()
 slide_ids = []
 for vis_fold in slides_path.iterdir():
@@ -254,4 +261,3 @@ for vis_fold in slides_path.iterdir():
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj
-# %%

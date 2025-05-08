@@ -1,9 +1,15 @@
-# %% Setup and load some preliminaries
+---
+title: "Preprocessing steps for scRNAseq and deconvolution fractions"
+jupyter: python3
+---
 
-## NB! run this on a gpu node with the endo_ev_preproc environment
-# theres a conflict with the torch version and the omicverse version
-# so we have endo_ev and endo_ev_preproc environments separately
+## Setup and load some preliminaries
 
+NB! run this on a gpu node with the endo_ev_preproc environment
+theres a conflict with the torch version and the omicverse version
+so we have endo_ev and endo_ev_preproc environments separately
+
+```{python}
 import pandas as pd
 import scanpy as sc
 import omicverse as ov
@@ -14,7 +20,7 @@ from os import getenv
 from dotenv import load_dotenv
 
 ## set the random seed for torch
-RANDO_SEED = 13
+RANDO_SEED = 9
 import torch
 torch.manual_seed(RANDO_SEED)
 import random
@@ -57,10 +63,11 @@ replace_immu = {
 }
 inv_replace_immu = {value: key for key, values in replace_immu.items() for value in values}
 cyclephase_to_include = ["LS", "LP", "EP", "ES", "MS", "Menstrual"]
+```
 
+## Do the scRNAseq transformation
 
-
-# %% Do the scRNAseq transformation
+```{python}
 snapshot_an_loc = Path(data_folder) / "sc_deconv_snapshot.h5ad"
 if not snapshot_an_loc.exists():
   ## Load the main HECA dataset if not already formatted
@@ -121,11 +128,11 @@ if not snapshot_an_loc.exists():
   sc_dat.write(snapshot_an_loc)
 else:
   sc_dat = an.read_h5ad(snapshot_an_loc)
+```
 
+## load in the UF and biopsy bulk datasets
 
-
-# %% load in the UF and biopsy bulk datasets
-
+```{python}
 ## load in the EV data
 comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather").set_index("gene_id").iloc[:-1]
 comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather").set_index("external_gene_name").iloc[:-1]
@@ -191,10 +198,11 @@ clin_uf_raw = (
 )
 clin_uf_raw.index.name = "gene_id"
 clin_uf_raw = clin_uf_raw.loc[:, clin_uf_pheno.index]
+```
 
+## Parameters for the celltype models
 
-
-# %% Parameters for the celltype models
+```{python}
 model_params = {
   "celltype_key": "celltype",
   "top_marker_num": 250, # reduce it from the default parameter of 500
@@ -218,10 +226,11 @@ vae_params = {
   "hidden_size": 256,
   "epoch_num": 100 # looking at loss plot then 500 seems to be already enough
 }
+```
 
+## Run for the UF samples
 
-
-# %% Run for the celltype models
+```{python}
 fractions_folder = Path(data_folder) / "tape_fractions"
 
 # subset only uf samples
@@ -233,7 +242,11 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_tmp = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_tmp.to_csv(fractions_file, sep="\t")
+```
 
+## Run for the non-batch-corrected CCHT UF and biopsy samples
+
+```{python}
 ## process only the non-batch-corrected ccht UF and biopsy samples
 ## use this model later for the spatial projection too
 fractions_file = fractions_folder / "ccht_fracs.tsv"
@@ -244,9 +257,11 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
+```
 
+## Run for the batch-corrected counts
 
-
+```{python}
 ## process the batch corrected counts
 fractions_file = fractions_folder / "comb_fracs.tsv"
 model_obj = ov.bulk2single.Bulk2Single(
@@ -256,7 +271,11 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep="\t")
+```
 
+## Run for the combined raw counts
+
+```{python}
 ## process the combined raw counts
 fractions_file = fractions_folder / "comb_fracs_raw.tsv"
 model_obj = ov.bulk2single.Bulk2Single(
@@ -266,7 +285,11 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep="\t")
+```
 
+## Run for the SCRATCH RIF dataset
+
+```{python}
 ## the SCRaTCH RIF dataset
 fractions_file = fractions_folder / "scratch_fracs.tsv"
 model_obj = ov.bulk2single.Bulk2Single(
@@ -276,7 +299,11 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
+```
 
+## Run for the clinical CCHT EV samples
+
+```{python}
 ## the clinical CCHT EV samples
 fractions_file = fractions_folder / "clin_fracs.tsv"
 model_obj = ov.bulk2single.Bulk2Single(
@@ -286,3 +313,4 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
+```
