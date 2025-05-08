@@ -224,31 +224,6 @@ vae_params = {
 # %% Run for the celltype models
 fractions_folder = Path(data_folder) / "tape_fractions"
 
-## process the batch corrected counts
-fractions_file = fractions_folder / "comb_fracs.tsv"
-model_obj = ov.bulk2single.Bulk2Single(
-  bulk_data=comb_all,
-  single_data=sc_dat,
-  **model_params
-)
-frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
-frac_pred.to_csv(fractions_file, sep="\t")
-
-## quick check of the model reproducibility with the seed
-# frac_pred_old = frac_pred.copy()
-# frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
-# print(np.subtract(frac_pred, frac_pred_old))
-
-## process the combined raw counts
-fractions_file = fractions_folder / "comb_fracs_raw.tsv"
-model_obj = ov.bulk2single.Bulk2Single(
-  bulk_data=comb_all_raw,
-  single_data=sc_dat,
-  **model_params
-)
-frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
-frac_pred.to_csv(fractions_file, sep="\t")
-
 # subset only uf samples
 fractions_file = fractions_folder / "comb_uf_fracs.tsv"
 model_obj = ov.bulk2single.Bulk2Single(
@@ -269,6 +244,28 @@ model_obj = ov.bulk2single.Bulk2Single(
 )
 frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
 frac_pred.to_csv(fractions_file, sep = "\t")
+
+
+
+## process the batch corrected counts
+fractions_file = fractions_folder / "comb_fracs.tsv"
+model_obj = ov.bulk2single.Bulk2Single(
+  bulk_data=comb_all,
+  single_data=sc_dat,
+  **model_params
+)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
+frac_pred.to_csv(fractions_file, sep="\t")
+
+## process the combined raw counts
+fractions_file = fractions_folder / "comb_fracs_raw.tsv"
+model_obj = ov.bulk2single.Bulk2Single(
+  bulk_data=comb_all_raw,
+  single_data=sc_dat,
+  **model_params
+)
+frac_pred = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
+frac_pred.to_csv(fractions_file, sep="\t")
 
 ## the SCRaTCH RIF dataset
 fractions_file = fractions_folder / "scratch_fracs.tsv"

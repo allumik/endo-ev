@@ -145,7 +145,7 @@ general_cells = ( # associate celltypes with the lineage information in the sc_d
 )
 
 # Color scale for the celltypes - TODO: extende the color range to not repeat
-global_color_scale = alt.Scale(domain=general_cells.index.unique().tolist())
+global_color_scale = alt.Scale(domain=general_cells.index.unique().tolist(), scheme="category20")
 ```
 
 We also load in the different statistical testing tables for CCHT dataset.
@@ -156,7 +156,7 @@ ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
 ccht_comp_stat = pd.read_excel(fractions_folder / "ccht_comp.xlsx", index_col=0)
 ```
 
-And the featurecounts results for the samples from the MultiQC report.
+Featurecounts results for the samples from the MultiQC report.
 
 ```{python}
 features_ev = (
@@ -168,6 +168,19 @@ features_ev = (
   .set_index("samplename")
 )
 ```
+
+QualiMap results for the samples from the MultiQC report.
+
+```{python}
+qualimap_ev = (
+  pd.read_table(
+    Path(raw_data_folder) / "multiqc/star_rsem/multiqc_data/qualimap_rnaseq_genome_results.txt"
+    )
+  .rename(columns={"Sample": "samplename"})
+  .set_index("samplename")
+)
+```
+
 
 The preprocessed spatial slides with spatial deconvolution
 
@@ -235,10 +248,10 @@ The following code is an excerpt from the `ev_raw.r` script, describing the main
 #### FILTER
 # HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
 # HUT10 does not have a paired biopsy sample
-# HUT33, HUT53, HUT17 were excluded due to low biotype proportion
+# HUT33, HUT53, HUT17 were excluded due to low intronic proportion
 removals <- c(
   "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT33_UF", "HUT33_biopsy",
+  "HUT10_UF", "HUT1_UF", "HUT1_biopsy",
   "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
 )
 # HUT23_UF was swapped with HUT23_biopsy based on clustering
@@ -298,6 +311,8 @@ study_schema = spacer_with_text(height=400, width=580)
 ```
 
 ### Overview of the Samples {.unnumbered .unlisted}
+
+> Figure out how to visualise all the different celltypes in per cycle phase.
 
 ```{python}
 # barplot of the number of samples throughout the cycle phase
@@ -427,7 +442,7 @@ peruvian_bio_ev.show()
 biplot, pca = biplot_fractions(
   frac_pred,
   ccht_uf_pheno,
-  color_field="cyclephase", 
+  color_field="cyclephase",
   style_field="group",
   text_limit = 0.04, # controls on how much labels are shown
   dims = (400, 400)
@@ -1653,31 +1668,81 @@ protein_coding_percentages = df_melted[df_melted['biotype'] == 'protein_coding']
 sample_order = protein_coding_percentages.sort_values(ascending=False).index.tolist()
 
 # --- Plotting logic starts here ---
-base_chart = alt.Chart(df_melted).mark_bar().encode(
+biotype_prop = alt.Chart(df_melted).mark_bar().encode(
   y=alt.Y('samplename:N', title='Sample', sort=sample_order),
   x=alt.X('percentage:Q', title='Percentage (%)', scale=alt.Scale(domain=(.8, 1)), axis=alt.Axis(format='%')),
   color=alt.Color('biotype:N', title='Biotype', sort=top_biotypes, scale=alt.Scale(scheme='category10')),
   order=alt.Order('color_biotype_sort_index:Q') # sort by the color fields
 ).properties(
   height=alt.Step(12), # Adjust bar width by setting step
-  width=250,
+  width=300,
   title="Biotype Proportions per Sample (Unfiltered, Top 10 Biotypes)"
 )
 
-# Add a rule (line) at y=90%
-rule = alt.Chart(pd.DataFrame({'percentage': [0.9]})).mark_rule(strokeDash=[5, 5], color='red').encode(
-  x=alt.X('percentage:Q')
-)
-
-biotype_prop = (base_chart + rule)
 biotype_prop.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
 ```
 
-Lower half of the plot
+### Qualimap read type plot for unfiltered groups {.unnumbered .unlisted}
+
+```{python}
+# Select relevant columns and samples
+cols_to_plot = ["reads_aligned_exonic", "reads_aligned_intronic", "reads_aligned_intergenic"]
+plot_data = qualimap_ev.reset_index().rename(columns={"index": "samplename"})
+plot_data = plot_data[plot_data['samplename'].str.contains("HUT", na=False)][["samplename"] + cols_to_plot].copy()
+
+# Calculate total reads for percentage calculation
+plot_data['total_reads'] = plot_data[cols_to_plot].sum(axis=1)
+
+# Calculate percentages
+for col in cols_to_plot:
+  plot_data[col + '_perc'] = (plot_data[col] / plot_data['total_reads'])
+
+# Determine sort order based on intronic reads percentage BEFORE melting
+sample_order = (
+  plot_data
+  .sort_values('reads_aligned_intronic_perc', ascending=False)['samplename']
+  .tolist()
+)
+
+# Melt the DataFrame for Altair
+plot_data_melted = plot_data.melt(
+  id_vars=['samplename'],
+  value_vars=[col + '_perc' for col in cols_to_plot],
+  var_name='read_type',
+  value_name='percentage'
+)
+
+# Clean up read_type names
+plot_data_melted['read_type'] = plot_data_melted['read_type'].str.replace('reads_aligned_', '').str.replace('_perc', '')
+
+# Create the Altair plot
+qualimap_plot = alt.Chart(plot_data_melted).mark_bar().encode(
+  x=alt.X('percentage:Q', axis=alt.Axis(format='%', title='Percentage of Reads'), stack='normalize'),
+  y=alt.Y('samplename:N', title='Sample', sort=sample_order),
+  color=alt.Color('read_type:N', title='Read Type', scale=alt.Scale(scheme='category10')),
+  order=alt.Order(field='read_type', type='nominal'),
+  tooltip=['samplename', 'read_type', alt.Tooltip('percentage:Q', format='.2%')]
+).properties(
+  title='Read Alignment Distribution (Exonic, Intronic, Intergenic)',
+  height=alt.Step(12),
+  width=300
+)
+
+# Add a rule (line) at y=85%
+rule = alt.Chart(pd.DataFrame({'percentage': [0.85]})).mark_rule(strokeDash=[5, 5], color='red').encode(
+  x=alt.X('percentage:Q')
+)
+
+qualimap_plot = (qualimap_plot + rule)
+qualimap_plot.interactive()
+```
+
+Lower half of supp. fig. 1
 
 ```{python}
 supp_1 = (
-  biotype_prop | (umap_plot_unfilt & umap_plot) 
+  biotype_prop | qualimap_plot |
+    (umap_plot_unfilt & umap_plot).resolve_scale( x="independent", y="independent") 
   ).resolve_scale(
     x="independent", y="independent", color="independent", shape="independent"
     )

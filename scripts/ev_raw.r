@@ -71,8 +71,8 @@ pheno <-
 # HUT33, HUT53, HUT17 were excluded due to low biotype proportion
 # HUT23_UF was swapped with HUT23_biopsy based on clustering
 removals <- c(
-  "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT33_UF", "HUT33_biopsy",
+  "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_1", "HUT71_biopsy_2", "HUT71_biopsy_3",
+  "HUT10_UF", "HUT1_UF", "HUT1_biopsy",
   "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
 )
 

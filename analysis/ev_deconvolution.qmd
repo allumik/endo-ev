@@ -213,7 +213,6 @@ general_cells = (
 As the proportions add up to one, we can also generate a stacked barplot for the cell proportions per cell type over all the samples.
 
 ```{python}
-
 dendro_barplot(
   frac_pred,
   comb_all_pheno,
@@ -222,11 +221,9 @@ dendro_barplot(
   legend_phase_ncol=comb_all_pheno.cyclephase.unique().size,
   legend_class_ncol=3
   )
-
 ```
 
 ```{python}
-
 # do a summarised lineage plot
 dendro_barplot(
   (
@@ -246,13 +243,11 @@ dendro_barplot(
   legend_phase_ncol=1,
   legend_class_ncol=1
   )
-
 ```
 
 And a stacked area plot showcasing either the UF and biopsy ratio differences...
 
 ```{python}
-
 fractions_long = peruvian_transform(
   fractions=frac_pred,
   phenotype=comb_all_pheno,
@@ -264,7 +259,6 @@ peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group"
 ).show()
-
 ```
 
 ... or the dataset differences (note that Vigano only has early and mid secretory).
