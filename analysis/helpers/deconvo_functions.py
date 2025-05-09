@@ -30,7 +30,7 @@ def convert_to_long(fracs, pheno) -> pd.DataFrame:
 def ttest_table(fracs_long, testing_col="cyclephase", grouping_col="celltype") -> pd.DataFrame:
   ttest_res = {
     grouping_var:
-      ttest_ind(*[dat.query(f"`{testing_col}` == @cycle")["ratio"] for cycle in dat[testing_col].unique()])
+      ttest_ind(*[dat.query(f"`{testing_col}` == @cycle")["ratio"] for cycle in dat[testing_col].unique()], equal_var=False)
     for grouping_var, dat in fracs_long.groupby(grouping_col)
   }
   return pd.DataFrame(ttest_res).T.set_axis(["t-stat", "p-val"], axis=1)

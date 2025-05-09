@@ -72,7 +72,7 @@ pheno <-
 # HUT23_UF was swapped with HUT23_biopsy based on clustering
 removals <- c(
   "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_1", "HUT71_biopsy_2", "HUT71_biopsy_3",
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy",
+  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT23_biopsy", "HUT23_UF",
   "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
 )
 
@@ -80,24 +80,24 @@ removals <- c(
 raw_mat_unfilt <- raw_mat
 raw_mat <-
   raw_mat %>%
-  rename(
-    ## this takes too much time to figure out how to switch programmatically
-    ## just switch manually
-    HUT23_biopsy = HUT23_UF,
-    HUT23_UF = HUT23_biopsy
-  ) %>%
+#   rename(
+#     ## this takes too much time to figure out how to switch programmatically
+#     ## just switch manually
+#     HUT23_biopsy = HUT23_UF,
+#     HUT23_UF = HUT23_biopsy
+#   ) %>%
   select(-removals[removals %in% colnames(raw_mat)])
 
 # switch and filter some samples
 tpm_mat_unfilt <- tpm_mat
 tpm_mat <-
   tpm_mat %>%
-  rename(
-    ## this takes too much time to figure out how to switch programmatically
-    ## just switch manually
-    HUT23_biopsy = HUT23_UF,
-    HUT23_UF = HUT23_biopsy
-  ) %>%
+#   rename(
+#     ## this takes too much time to figure out how to switch programmatically
+#     ## just switch manually
+#     HUT23_biopsy = HUT23_UF,
+#     HUT23_UF = HUT23_biopsy
+#   ) %>%
   select(-removals[removals %in% colnames(tpm_mat)])
 
 

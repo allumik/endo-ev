@@ -1498,7 +1498,27 @@ We have excluded the following samples with their corresponding pair due to
 * HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
 * HUT10 does not have a paired biopsy sample
 * HUT71, HUT53, HUT17 were excluded due to low biotype proportion
-* HUT23_UF was swapped with HUT23_biopsy based on clustering
+* HUT23_UF was swapped with HUT23_biopsy based on clustering, but excluded for the analysis
+
+The correlation between techical replicates HUT71_biopsy, HUT71_biopsy_2, HUT71_biopsy_3 for TPM reads (average and the correlation matrix) is shown below.
+
+```{python}
+# Select columns containing "HUT71_biopsy"
+hut71_biopsy_samples = ccht_uf_unfilt_tpm.filter(regex="HUT71_biopsy")
+
+# Calculate the correlation between these samples
+correlation_hut71 = hut71_biopsy_samples.corr(method='spearman')
+
+# Average correlation between replicates is
+# take it from the entry above the diagonal
+print(correlation_hut71.where(np.triu(np.ones(correlation_hut71.shape), k=1).astype(bool)).stack().mean())
+
+# Optional: visualize with seaborn if desired for a nicer output in the report
+plt.figure(figsize=(4, 3))
+sns.heatmap(correlation_hut71, annot=True, cmap="viridis", fmt=".2f")
+plt.title("Correlation of HUT71 Biopsy Replicates")
+plt.show()
+```
 
 ::: {.panel-tabset}
 
@@ -1669,17 +1689,17 @@ sample_order = protein_coding_percentages.sort_values(ascending=False).index.tol
 
 # --- Plotting logic starts here ---
 biotype_prop = alt.Chart(df_melted).mark_bar().encode(
-  y=alt.Y('samplename:N', title='Sample', sort=sample_order),
-  x=alt.X('percentage:Q', title='Percentage (%)', scale=alt.Scale(domain=(.8, 1)), axis=alt.Axis(format='%')),
+  x=alt.X('samplename:N', title='Sample', sort=sample_order, axis=alt.Axis(labelAngle=-45)), # Swapped from y, added labelAngle
+  y=alt.Y('percentage:Q', title='Percentage (%)', scale=alt.Scale(domain=(.8, 1)), axis=alt.Axis(format='%')), # Swapped from x
   color=alt.Color('biotype:N', title='Biotype', sort=top_biotypes, scale=alt.Scale(scheme='category10')),
   order=alt.Order('color_biotype_sort_index:Q') # sort by the color fields
 ).properties(
-  height=alt.Step(12), # Adjust bar width by setting step
-  width=300,
+  width=alt.Step(12), # Adjust bar width by setting step, now applied to width
+  height=100, # Was width, now height
   title="Biotype Proportions per Sample (Unfiltered, Top 10 Biotypes)"
 )
 
-biotype_prop.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
+biotype_prop.interactive()
 ```
 
 ### Qualimap read type plot for unfiltered groups {.unnumbered .unlisted}
@@ -1717,20 +1737,20 @@ plot_data_melted['read_type'] = plot_data_melted['read_type'].str.replace('reads
 
 # Create the Altair plot
 qualimap_plot = alt.Chart(plot_data_melted).mark_bar().encode(
-  x=alt.X('percentage:Q', axis=alt.Axis(format='%', title='Percentage of Reads'), stack='normalize'),
-  y=alt.Y('samplename:N', title='Sample', sort=sample_order),
+  x=alt.X('samplename:N', title='Sample', sort=sample_order, axis=alt.Axis(labelAngle=-45)),
+  y=alt.Y('percentage:Q', axis=alt.Axis(format='%', title='Percentage of Reads'), stack='normalize'),
   color=alt.Color('read_type:N', title='Read Type', scale=alt.Scale(scheme='category10')),
-  order=alt.Order(field='read_type', type='nominal'),
+  order=alt.Order(field='read_type', type='nominal'), # Ensures consistent stacking order
   tooltip=['samplename', 'read_type', alt.Tooltip('percentage:Q', format='.2%')]
 ).properties(
   title='Read Alignment Distribution (Exonic, Intronic, Intergenic)',
-  height=alt.Step(12),
-  width=300
+  width=alt.Step(12), # Adjust bar width for each sample
+  height=100 # Overall height of the plot
 )
 
 # Add a rule (line) at y=85%
 rule = alt.Chart(pd.DataFrame({'percentage': [0.85]})).mark_rule(strokeDash=[5, 5], color='red').encode(
-  x=alt.X('percentage:Q')
+  y=alt.Y('percentage:Q') # Rule is now horizontal
 )
 
 qualimap_plot = (qualimap_plot + rule)
@@ -1741,7 +1761,7 @@ Lower half of supp. fig. 1
 
 ```{python}
 supp_1 = (
-  biotype_prop | qualimap_plot |
+  biotype_prop & qualimap_plot |
     (umap_plot_unfilt & umap_plot).resolve_scale( x="independent", y="independent") 
   ).resolve_scale(
     x="independent", y="independent", color="independent", shape="independent"

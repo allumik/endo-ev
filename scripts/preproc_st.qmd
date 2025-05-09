@@ -1,5 +1,9 @@
 ---
 title: "Preprocess and project the spatial transcriptomics data"
+format:
+  html:
+    embed-resources: true
+    self-contained-math: true
 jupyter: python3
 ---
 
@@ -17,7 +21,7 @@ from os import getenv
 from dotenv import load_dotenv
 
 ## set the random seed for torch and others
-RANDO_SEED = 9
+RANDO_SEED = 96
 import torch
 torch.manual_seed(RANDO_SEED)
 import random
