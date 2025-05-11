@@ -257,12 +257,6 @@ removals <- c(
 # HUT23_UF was swapped with HUT23_biopsy based on clustering
 ```
 
-> The patient selection criteria is missing. @Elina or @Andres to provide the details.
-
-TODO:
-
-* run correlation for the technical replicates of HUT71.
-
 ## Deconvolutional model parameters
 
 >Create supplementary figures visualising the training loss and the model performance.
@@ -503,101 +497,133 @@ loadings_plt.show()
 Here we create a visual representation of the statistical testing and correlation analysis results of the UF and Biopsy samples. We present the most statistically significant changes throughout the cycle phases.
 
 ```{python}
+# Helper function to swap group1 and group2 in the DataFrame for specified pairs
 def swap_groups(df, to_swap):
   for g1, g2 in to_swap:
-    # find that combination of pairs in the dataframe
-    stats_view = (df.group1==g1) & (df.group2==g2)
-    # swap the column names for those pairs of groups
+    stats_view = (df.group1 == g1) & (df.group2 == g2)
     swapped_view = df.loc[stats_view].rename(columns={"group1": "group2", "group2": "group1"})
-    # also invert the diff bc the groups have swapped
     swapped_view["meandiff"] *= -1
-    # and now replace that part of the dataframe
     df.loc[stats_view] = swapped_view
   return df
 
+# Configuration for data processing and plotting
 swapper = [("post", "rec"), ("rec", "pre"), ("pre", "pro")]
-excluder = ["post_vs_pre", "pro_vs_rec", "post_vs_pro"]
 comp_order = ["pro_vs_pre", "pre_vs_rec", "rec_vs_post"]
 cycle_order = ["pro", "pre", "rec", "post"]
-plt_width, plt_height = (1000, 150)
+plt_width, plt_height = (1000, 150) # Plot dimensions
 
-stat_comb_prim = (
+from itertools import product
+
+# Prepare base statistical data
+base_data = (
   pd.concat([ccht_bio_stat.assign(method="bio"), ccht_uf_stat.assign(method="uf")])
   .query("`anova p-val` <= 0.05")
   .pipe(swap_groups, swapper)
-  .assign(
-    p_stars=lambda x:
-      np.select(
-          [ x["p-adj"] <= 0.001, x["p-adj"] <= 0.01, x["p-adj"] <= 0.05, True],
-          ["***", "**", "*", ""],
-          default=""  # Add this default value
-      ),
-    comparison=lambda x: x.group1 + "_vs_" + x.group2,
-    meandiff_format=lambda x: "Δ " + round(x.meandiff * 100, 2).astype(str) + "%",
-    padj_format=lambda x: np.where(x["p-adj"] < 0.01, "FDR <0.01", "FDR " + round(x["p-adj"], 2).astype(str))
-  )
-  # the great filter
-  .query("comparison not in @excluder")
-  .dropna(subset=["comparison"])
-  .join(general_cells, on="celltype")
-  .sort_values(["lineage", "celltype"])
+  .assign(comparison_orig=lambda x: x.group1 + "_vs_" + x.group2)
+)
+
+# Create a scaffold for all desired combinations
+unique_celltypes = base_data.celltype.unique()
+all_methods = ['bio', 'uf']
+full_scaffold = pd.DataFrame(
+  list(product(unique_celltypes, all_methods, comp_order)),
+  columns=['celltype', 'method', 'comparison']
+)
+
+# Merge scaffold with base_data and derive final columns
+stat_comb_prim = (
+  pd.merge(
+    full_scaffold,
+    base_data.rename(columns={'comparison_orig': 'comparison'}),
+    on=['celltype', 'method', 'comparison'],
+    how='left' # Keep all scaffold rows, fill missing data with NaN
+  ).assign(
+    group1=lambda df: df['comparison'].str.split('_vs_', expand=True)[0],
+    group2=lambda df: df['comparison'].str.split('_vs_', expand=True)[1],
+    p_stars=lambda x: np.select(
+        [x["p-adj"] <= 0.001, x["p-adj"] <= 0.01, x["p-adj"] <= 0.05, True],
+        ["***", "**", "*", ""], default=""
+    ),
+    meandiff_format=lambda x: "Δ " + x.meandiff.mul(100).round(2).astype(str) + "%",
+    padj_format=lambda x: np.select(
+        [x["p-adj"].isna(), x["p-adj"] < 0.01],
+        ["FDR NA", "FDR <0.01"],
+        default="FDR " + x["p-adj"].round(2).astype(str)
+    )
+  ).join(general_cells, on="celltype") # Add lineage information
+  .assign(comparison_cat=lambda df: pd.Categorical(df['comparison'], categories=comp_order, ordered=True))
+  .sort_values(["lineage", "celltype", "method", "comparison_cat"])
+  .drop(columns=['comparison_cat'])
   .reset_index(drop=True)
 )
+
+# Define heatmap cell height and calculate total plot height
+heatmap_target_cell_height = 50
+num_y_categories = stat_comb_prim.celltype.nunique()
+calculated_heatmap_height = heatmap_target_cell_height * num_y_categories if num_y_categories > 0 else plt_width
+
 ```
 
 For the Biopsy samples comparison:
 
 ```{python}
 stat_comb = stat_comb_prim.query("method == 'bio'")
+stat_comb_celltypes = stat_comb.celltype.drop_duplicates().values
 
 # create a dummy dataframes for the custom scale hack
+# This dataframe seems intended for a very specific annotation,
+# as 'celltype' is fixed to the first unique celltype.
 stat_tmp_groups = pd.DataFrame({
   "base": cycle_order,
-  "celltype": stat_comb.celltype.drop_duplicates().values[0], 
+  "celltype": stat_comb_celltypes[-1],
   "loc": np.linspace(0,1,len(cycle_order))
   })
 
-# set up basechart for the X axis, sadly we'll have to redefine the Y axis for 
-# both the text and heatmap due to differences in handling of ticks
+# set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values).axis(labelAngle=-45, orient="top", title="Biopsy"),
-  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, tickBand="extent", title=None)
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None),
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=True, title=None)
 )
 
+# the base heatmap
 heatmap = base_chart.mark_rect().encode(
-  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]).legend(None)
-  )
+  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]).legend(None))
 
-# the significance testing texty part
-base_text = base_chart.encode(
-  # have to override yaxis ticks here, otherwise it'll add it to the right side later
-  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, ticks=False, title=None) 
-)
-text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, dy=-6).encode(
-  text=alt.Text("p_stars"))
-text_overlay_diff = base_text.mark_text(fontSize=10, dy=14).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
-text_overlay_pval = base_text.mark_text(fontSize=10, dy=2).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
+# the grey background for the missing values
+grey_background = base_chart.mark_rect().encode(
+  color=alt.condition(alt.datum.meandiff == None, alt.value("lightgrey"), alt.value(None)))
 
-# create a pseudoaxis plot where we create custom labels for the marks
-yaxis_group = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="right").encode(
-  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values),
-  y=alt.Y("loc:Q").axis(None),
-  xOffset=alt.value(-15),
-  text=alt.Text("base")
-)
-
-# create another pseudoaxis plot to show the lineages of celltypes as a colored line above heatmap values
-xaxis_group_colors = alt.Chart(stat_comb).mark_rect().encode(
-  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values).axis(orient="top"),
-  yOffset=alt.value(plt_height + 10), # set it to +10 of the plot height so that it would overlap
+# This layer creates a color strip for lineages, positioned to the right of the main plot.
+yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes),
+  xOffset=alt.value(10), # was yOffset, using o, increased for spacing
   color=alt.Color("lineage:N").legend(None)
 )
 
+# the significance testing texty part
+base_text = base_chart.encode(
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None))
+# Use dy for vertical positioning, dx for horizontal if needed (or align)
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, align="center", dy=-10).encode(
+  text=alt.Text("p_stars"))
+text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
+text_overlay_diff = base_text.mark_text(fontSize=10, align="center", dy=12).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
+
+# This layer creates custom text labels.
+custom_annotation_layer = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="center").encode(
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes),
+  x=alt.X("loc:Q").axis(labels=False, ticks=False, title="Biopsy"),
+  yOffset=alt.value(heatmap_target_cell_height + 10), # Adjust as needed to position above x-axis title/labels
+  text=alt.Text("base")
+)
+
 comp_stats_bio_plt = (
-  xaxis_group_colors + heatmap + text_overlay_stars + text_overlay_diff + text_overlay_pval + yaxis_group
-).properties(width=plt_width, height=plt_height)
+  yaxis_color_strip + grey_background + heatmap +
+  text_overlay_stars + text_overlay_diff + text_overlay_pval +
+  custom_annotation_layer
+).properties(width=plt_height, height=calculated_heatmap_height) # Use calculated height
 
 comp_stats_bio_plt.show()
 ```
@@ -606,57 +632,61 @@ For the UF samples comparison:
 
 ```{python}
 stat_comb = stat_comb_prim.query("method == 'uf'")
+stat_comb_celltypes = stat_comb.celltype.drop_duplicates().values
 
 # create a dummy dataframes for the custom scale hack
 stat_tmp_groups = pd.DataFrame({
   "base": cycle_order,
-  "celltype": stat_comb.celltype.drop_duplicates().values[0], 
+  "celltype": stat_comb_celltypes[-1],
   "loc": np.linspace(0,1,len(cycle_order))
   })
 
-# set up basechart for the X axis, sadly we'll have to redefine the Y axis for 
-# both the text and heatmap due to differences in handling of ticks
+# set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values).axis(labelAngle=-45, title="UF"),
-  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, tickBand="extent", title=None)
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None, titleY=25),
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=False, ticks=False, title=None)
 )
 
+# the base heatmap
 heatmap = base_chart.mark_rect().encode(
-  color=alt.Color("meandiff:Q")
-    .scale(scheme="blueorange", domain=[-.2,.2])
-  )
+  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]).legend(None))
+
+# the grey background for the missing values
+grey_background = base_chart.mark_rect().encode(
+  color=alt.condition(alt.datum.meandiff == None, alt.value("lightgrey"), alt.value(None)))
+
+# This layer creates a color strip for lineages, positioned to the right of the main plot.
+yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(title=None),
+  x2=alt.value(-10), # set to 0 to not draw it behind the main heatmap (shows small lines)
+  color=alt.Color("lineage:N").legend(None)
+)
 
 # the significance testing texty part
+# base_text overrides the x-axis of the base_chart for text mark positioning
 base_text = base_chart.encode(
-  # have to override yaxis ticks here, otherwise it'll add it to the right side later
-  y=alt.Y("comparison:N", sort=comp_order[::-1]).axis(labels=False, ticks=False, title=None) 
-)
-text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, dy=-6).encode(
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None))
+# Use dy for vertical positioning of text
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, align="center", dy=-10).encode(
   text=alt.Text("p_stars"))
-text_overlay_diff = base_text.mark_text(fontSize=10, dy=14).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
-text_overlay_pval = base_text.mark_text(fontSize=10, dy=2).encode(
+text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
+text_overlay_diff = base_text.mark_text(fontSize=10, align="center", dy=12).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
 
-# create a pseudoaxis plot where we create custom labels for the marks
-yaxis_group = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="right").encode(
-  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values),
-  y=alt.Y("loc:Q").axis(None),
-  xOffset=alt.value(-15),
+# This layer creates custom text labels for the x-axis.
+custom_annotation_layer = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="center").encode(
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes),
+  x=alt.X("loc:Q").axis(labels=False, ticks=False, title="UF"),
+  yOffset=alt.value(heatmap_target_cell_height + 10),
   text=alt.Text("base")
 )
 
-# create another pseudoaxis plot to show the lineages of celltypes as a colored line above heatmap values
-xaxis_group_colors = alt.Chart(stat_comb).mark_rect().encode(
-  x=alt.X("celltype:N", sort=stat_comb.celltype.drop_duplicates().values),
-  yOffset=alt.value(-10), # offset to overlay on the top
-  y2=alt.value(0), # set to 0 to not draw it behind the main heatmap (shows small lines)
-  color=alt.Color("lineage:N")
-)
-
 comp_stats_uf_plt = (
-  xaxis_group_colors + heatmap + text_overlay_stars + text_overlay_diff + text_overlay_pval + yaxis_group
-).properties(width=plt_width, height=plt_height)
+  yaxis_color_strip + grey_background + heatmap +
+  text_overlay_stars + text_overlay_diff + text_overlay_pval +
+  custom_annotation_layer
+).properties(width=plt_height, height=calculated_heatmap_height) # Use calculated height
 
 comp_stats_uf_plt.show()
 ```
@@ -666,7 +696,7 @@ And combined on top of each other
 ```{python}
 # remove the legend from one of those plots, id does not sync it for some reason
 # TODO: the lineage colors are still not synchronised
-comp_stats_plt = (comp_stats_bio_plt & comp_stats_uf_plt).resolve_scale(x="independent")
+comp_stats_plt = (comp_stats_bio_plt | comp_stats_uf_plt).resolve_scale(x="independent")
 comp_stats_plt.show()
 ```
 
@@ -676,9 +706,11 @@ Combining them all into one.
 
 ```{python}
 # have to resolve the color scale, otherwise the loadings_plt will override the biplot's scale
-((peruvian_bio_ev | (biplot & loadings_plt)) & comp_stats_plt
-  ).resolve_scale(color="independent").show()
-# below both of them there should be the directionality plot of DE proportions
+(
+  peruvian_bio_ev | 
+  (biplot & loadings_plt).resolve_scale(color="independent", shape="independent") | 
+  comp_stats_plt
+).resolve_scale(color="independent", shape="independent").show()
 ```
 
 ## FIG 3: Comparison of Biopsy and EV Sampling Methods
@@ -1511,7 +1543,8 @@ correlation_hut71 = hut71_biopsy_samples.corr(method='spearman')
 
 # Average correlation between replicates is
 # take it from the entry above the diagonal
-print(correlation_hut71.where(np.triu(np.ones(correlation_hut71.shape), k=1).astype(bool)).stack().mean())
+print_corr = correlation_hut71.where(np.triu(np.ones(correlation_hut71.shape), k=1).astype(bool)).stack().mean()
+print(f"Average correlation between HUT71 biopsy replicates: {print_corr:.2f}")
 
 # Optional: visualize with seaborn if desired for a nicer output in the report
 plt.figure(figsize=(4, 3))
