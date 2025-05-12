@@ -649,7 +649,7 @@ base_chart = alt.Chart(stat_comb).encode(
 
 # the base heatmap
 heatmap = base_chart.mark_rect().encode(
-  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]).legend(None))
+  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]))
 
 # the grey background for the missing values
 grey_background = base_chart.mark_rect().encode(
@@ -659,7 +659,7 @@ grey_background = base_chart.mark_rect().encode(
 yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(title=None),
   x2=alt.value(-10), # set to 0 to not draw it behind the main heatmap (shows small lines)
-  color=alt.Color("lineage:N").legend(None)
+  color=alt.Color("lineage:N")
 )
 
 # the significance testing texty part
