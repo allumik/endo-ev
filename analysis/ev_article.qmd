@@ -319,10 +319,10 @@ barplot_ev_sum = alt.Chart(ccht_uf_pheno).mark_bar().encode(
 
 # include single cell data overview as extra column
 barplot_sc_sum = alt.Chart(
-  sc_dat.obs[["cyclephase", "samplename", "dataset"]].drop_duplicates()
+  sc_dat.obs[["cyclephase", "samplename", "dataset", "celltype"]].value_counts(["cyclephase", "dataset", "celltype"]).reset_index()
 ).mark_bar().encode(
   x=alt.X("cyclephase:N").title("").axis(labelAngle=-45),
-  y=alt.Y("count(dataset):Q").title("Nr. of Donors"),
+  y=alt.Y("count:Q").title("Nr. of Cells"),
   color=alt.Color("dataset:N").legend(orient="bottom", titleOrient="top", columns=2)
 ).properties(width=150, height=225)
 
@@ -340,58 +340,31 @@ Plot 10 top features per FeatureCounts output on log scale. Show the cutoff poin
 biotype_cols = features_ev.columns
 biotype_counts = features_ev[biotype_cols].sum().sort_values(ascending=False)
 
-# Get the top 10 biotypes
-top_biotypes = biotype_counts.head(10).index.tolist()
-# Calculate total counts per sample for the initially selected top_biotypes
-sample_totals = features_ev[top_biotypes].sum(axis=1)
+# Get the top 15 biotypes
+top_biotypes = biotype_counts.head(15).index.tolist()
 
-# Melt the DataFrame for plotting, including only the top biotypes
+# Melt the DataFrame for plotting, including only the top 5 biotypes
 df_melted = (
   features_ev
   .reset_index()
-  .query("samplename in @frac_pred.index")
   .melt(id_vars=['samplename'], value_vars=top_biotypes, var_name='biotype', value_name='count')
-)
-
-# Calculate percentage relative to the sum of these top_biotypes for that sample
-df_melted['percentage'] = df_melted.apply(
-  lambda row: (row['count'] / sample_totals[row['samplename']]) * 100 if sample_totals[row['samplename']] > 0 else 0, 
-  axis=1
 )
 
 # Create a new column for the sample group
 df_melted['sample_group'] = df_melted['samplename'].apply(lambda x: 'biopsy' if 'biopsy' in x else 'UF')
 
-# --- Plotting logic starts here ---
-
-# Separate data for protein_coding and other biotypes
-df_protein_coding = df_melted[df_melted['biotype'] == 'protein_coding'].copy()
-df_other_biotypes = df_melted[df_melted['biotype'] != 'protein_coding'].copy()
-
-# Define the sort order for other biotypes (maintaining original sort order from top_biotypes)
-# Ensure 'protein_coding' is excluded if it was in top_biotypes
-other_biotypes_sorted_list = [bt for bt in top_biotypes if bt != 'protein_coding']
-
-# Plot for protein_coding
-protein_coding_plot = alt.Chart(df_protein_coding).mark_boxplot(extent=1.5).encode(
-  x=alt.X('biotype:N', title=None).axis(labelAngle=-30),
-  y=alt.Y('percentage:Q', title='Percentage (%)').scale(domain=(80, 100)),
+# Create the grouped boxplot
+featurecounts_chart = alt.Chart(df_melted).mark_boxplot(extent=1.5).encode(
+  x=alt.X('biotype:N', title='Biotype', sort=top_biotypes).axis(labelAngle=-30),
+  y=alt.Y('count:Q', title='Count (log)').scale(type="log", nice=True).axis(values=[1e3, 1e4, 1e5, 1e6, 1e7, 1e8]),
   color=alt.Color('sample_group:N', title='Sample Group').legend(orient="top", titleOrient="left"),
-  xOffset='sample_group:N'
-).properties(height=150, width=60)
+  xOffset='sample_group:N',
+  tooltip=['samplename', 'biotype', 'count', 'sample_group'],
+).properties(
+  height=150,
+  width=550
+)
 
-threshold_line = alt.Chart(pd.DataFrame({'y': [90]})).mark_rule(strokeDash=[5,5], color='grey').encode(y='y:Q')
-protein_coding_chart_final = protein_coding_plot + threshold_line
-
-# Plot for other top biotypes
-other_biotypes_plot = alt.Chart(df_other_biotypes).mark_boxplot(extent=1.5).encode(
-  x=alt.X('biotype:N', title='10 Top Biotypes', sort=other_biotypes_sorted_list).axis(labelAngle=-30),
-  y=alt.Y('percentage:Q', title=None), # Independent y-axis scale
-  color=alt.Color('sample_group:N').legend(None), # Hide legend, will be shared
-  xOffset='sample_group:N'
-).properties(height=150, width=450)
-
-featurecounts_chart = protein_coding_chart_final | other_biotypes_plot
 featurecounts_chart.show()
 ```
 
@@ -885,11 +858,17 @@ final_chart
 Here we transform the deconvolution profiles into a volcano plot, where we show the differences in the proportions of the cell types between the biopsy and UF samples.
 
 ```{python}
-## calculate the diffs
+## calculate the diff
 avg_uf = frac_pred.loc[prepped_pheno.query("group == 'UF'").index,].agg("mean")
 avg_bio = frac_pred.loc[prepped_pheno.query("group == 'biopsy'").index,].agg("mean")
-diff_df = pd.DataFrame({"diff": avg_uf - avg_bio}).join(ccht_comp_stat).rename(columns={"p-val": "pval"})
-threshold_p = .05 / len(ccht_comp_stat.index)
+# calculate bonferroni correction for the p-values
+diff_df = (
+  pd.DataFrame({"diff": avg_uf - avg_bio})
+  .join(ccht_comp_stat)
+  .rename(columns={"p-val": "pval"})
+  .assign(p_adj_bonf = lambda x: (x["pval"] * len(ccht_comp_stat.index)).clip(upper=1.0))
+)
+threshold_p = .05
 
 ## base plot
 volcano_base = alt.Chart(
@@ -897,16 +876,16 @@ volcano_base = alt.Chart(
 ).mark_point(
   filled=True, opacity=.7
 ).encode(
-  x=alt.X("diff:Q").scale(domain=[-.12, .12]).axis(title="difference", tickCount=4),
-  y=alt.Y("pval:Q").scale(type="log", base=10, reverse=True).axis(title="p-value", tickCount=8),
-  color=alt.condition(alt.datum.pval < threshold_p, alt.value("red"), alt.value("grey"))
+  x=alt.X("diff:Q").scale(domain=[-.12, .12]).axis(title="Mean Proportion Difference (UF - Biopsy)", tickCount=4),
+  y=alt.Y("p_adj_bonf:Q").scale(type="log", base=10, reverse=True).axis(title="Adjusted p-value (Bonferroni)", tickCount=8),
+  color=alt.condition(alt.datum.p_adj_bonf < threshold_p, alt.value("red"), alt.value("grey"))
 )
 
 ## the text for the top two diff celltypes
 volcano_annot = alt.Chart(
-  diff_df.reset_index().sort_values("pval").head(4).assign(text_angle=lambda x: np.where(x["diff"] < 0, 330, 30))
+  diff_df.reset_index().sort_values("pval").query("p_adj_bonf < @threshold_p").assign(text_angle=lambda x: np.where(x["diff"] < 0, 330, 30))
 ).mark_text(align="center", dy=-8, angle=alt.expr(alt.datum.text_angle)).encode(
-  x=alt.X("diff:Q"), y=alt.Y("pval:Q"),
+  x=alt.X("diff:Q"), y=alt.Y("p_adj_bonf:Q"),
   text=alt.Text("celltype:N")
 )
 
@@ -914,7 +893,7 @@ volcano_annot = alt.Chart(
 rule_tmp = pd.DataFrame({"threshold_p": [ threshold_p ]})
 rule_y = alt.Chart(rule_tmp).mark_rule(color='black', strokeDash=[3,3]).encode(y="threshold_p")
 volcano = volcano_base + volcano_annot + rule_y
-volcano
+volcano.interactive()
 ```
 
 :::
@@ -1258,7 +1237,7 @@ pca_block = (pca_one & pca_two) | (pca_three & pca_four)
 )
 ```
 
-## FIG 5: Spatial Projections
+## FIG 5 & Supp. FIG 2: Spatial Projections
 
 Given the nature of the data, we expect to see a high correlation between the projected biopsy and the reference raw scRNA-seq data. The projected UF data should be more dispersed, as the UF samples are not directly comparable to the biopsy samples. Still, the UF samples should show a similar pattern of cell type distribution as the biopsy samples, per the assumption that the abundances of cell types in the UF samples indicate where the EV's are coming from in the tissue.
 
