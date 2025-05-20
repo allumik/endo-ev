@@ -20,20 +20,17 @@ import re
 import pandas as pd
 pd.set_option('display.max_columns', 100)
 import scanpy as sc
-import omicverse as ov
 import anndata as an
 import numpy as np
 import seaborn as sns
-import plotly.express as px
-import dash_bio
 import seaborn.objects as so
 import matplotlib.pyplot as plt
-from IPython.display import HTML
+from scipy.stats import kruskal
+from scipy.stats import pearsonr
 from pathlib import Path
 from os import getenv
 from dotenv import load_dotenv
-from scipy.sparse import csr_matrix
-from sklearn.preprocessing import normalize
+from os.path import expanduser
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -42,95 +39,19 @@ anndata_folder = getenv("ANNDATA_FOLDER")
 atlas_folder = getenv("ATLAS_FOLDER")
 data_folder = getenv("DATA_FOLDER")
 raw_data_folder = getenv("RAW_DATA_FOLDER")
-
-
-# some prelims for data standardisation
-replace_dict = {
-  "Proliferative Early": "EP",
-  "Proliferative Late": "LP",
-  "Secretory Early": "ES",
-  "Secretory Mid": "MS",
-  "Secretory Late": "LS",
-  "Secretory Early-Mid": "MS",
-  # "Secretory": "Secretory Mid",
-  "Mid-Secretory": "MS",
-  "Proliferative Disordered": "EP"
-}
-
-replace_immu = {
-  "Lymphatic": ["uNK1", "uNK1_cycling", "uNK2", "uNK3", "ILC3", "Peripheral_lymphocyte", "Lymphatic", "Immune_Lymphoid"],
-  "Myeloid": ["eM1", "eM2", "cDC1", "cDC2", "pDC", "Monocyte", "Immune_Myeloid"],
-  "B-cells": ["B_cell", "Plasma_B_cell"],
-  "T-cells": ["T_Reg", "T_cell_CD8", "T_cell_CD4", "T_cell_cycling"]
-}
-inv_replace_immu = {value: key for key, values in replace_immu.items() for value in values}
-
+snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
 
 ```
 
-Preprocessing for the HECA dataset:
-
-1) Load in the data
-2) join the immune cell annotation with the main dataset celltype annotation (all immune cells are in the main dataset)
-3) filter out "Hormones" celltypes and endometriotic samples 
-4) do some preprocessing
+Load in the HECA dataset.
 
 ```{python}
 #| output: false
 
-## Load the main HECA dataset
-sc_dat = sc.read_h5ad(
-  Path(raw_data_folder).expanduser() / "endometriumAtlasV2_cells_with_counts.h5ad",
-  backed = "r"
-)
-
-sc_dat_immu = sc.read_h5ad(
-  Path(raw_data_folder).expanduser() / "endometriumAtlasV2_cells_immune.h5ad",
-  backed = "r"
-)
-
-sc_dat.obs = (
-  sc_dat.obs
-  .assign(
-    cyclephase=lambda x: x.Stage.replace(replace_dict).astype("category"),
-    celltype=lambda x: 
-      x.celltype
-      .astype("object")
-      .mask(
-        x.index.isin(sc_dat_immu.obs.celltype.index), 
-        sc_dat_immu.obs.celltype.astype("object")
-      ),
-    label_long=lambda x:
-      x.label_long
-      .astype("object")
-      .mask(
-        x.index.isin(sc_dat_immu.obs.label_long.index), 
-        sc_dat_immu.obs.label_long.astype("object")
-      )
-      .astype("category")
-  )
-  .rename(columns={"sample": "samplename"})
-  # now generalise the cell types for better deconvolution classes
-  .assign(celltype=lambda x: x.celltype.replace(inv_replace_immu).astype("category"))
-)
-
-## also exclude the endometriosis samples
-the_condition = "(celltype not in @sc_dat.var.index) & (Endometrial_pathology == 'C')"
-sc_dat = sc_dat[sc_dat.obs.query(the_condition).index, :].to_memory()
-
-## exclude some celltypes, such as she hormones cell types and poorly represented samples
-count_tmp = sc_dat.obs.celltype.value_counts()
-no_go_celltype = list(count_tmp[count_tmp < 100].index) + ['eHormones', 'sHormones', 'dHormones']
-sc_dat = sc_dat[sc_dat.obs.query("celltype not in @no_go_celltype").index, :]
-
-sc_dat = ov.pp.preprocess(sc_dat.to_memory(), mode="pearson|pearson", n_HVGs=3000)
-# sc_dat = sc_dat[:, sc_dat.var.highly_variable_features]
-# check the minimum size of celltype matrix after filtering
-# np.min([sc_dat.obs.groupby(["Stage", "celltype"]).apply(lambda x: sc_dat[x.index, :].X.size)])
+## load in the modified HECA atlas
+sc_dat = an.read_h5ad(snapshot_an_loc)
 
 ```
-
-We also excluded celltypes that have less than 100 cells represented, that includes `{python} print(no_go_celltype)`
 
 Load in the bulk data from the EV and biopsy samples
 
@@ -225,22 +146,23 @@ sns.displot(
 
 # Biomarker expression through cyclephases in scRNA-seq
 
-Here we first subset the single-cell atlas per following criteria:
+## Statistical testing on the biogenesis genes
 
-* We filter out samples with "Whole Uterus" biopsy type
-* Filter out celltypes marked as "dHormones", "eHormones" and "sHormones"
-
-For gene comparison, we use the normalised counts from the scRNA-seq HECA dataset. These counts are normalised via Pearson residuals-based variance-stabilizing transformation [related article](https://www.nature.com/articles/s41592-023-01814-1#MOESM3).
-
-Following this, well look at all the different cycle phases that are also represented in the UF dataset:
-
-* EP or Early-Proliferative as "pro"/"Proliferative"
-* LP or Late-Proliferative as "pro"/"Proliferative"
-* ES or Early-Secretory as "pre"/"Pre-receptive"
-* MS or Mid-Secretory as "rec"/"Receptive"
-* LS or Late-Secretory as "post"/"Post-receptive"
+Here we will perform a statistical test on the expression of the ESCRT genes in the different cycle phases. We will use the Kruskal-Wallis test to check if there is a significant difference between the groups. Additionally, we will use pearson's rank correlation to check if there is a correlation between the expression of the genes and the cycle phase, which is coded into a dummy variable (0 - proliferative, 1 - early-secretory, 2 - mid-secretory, 3 - late-secretory).
 
 ```{python}
+## Create a dictionary of all the genes we want to plot
+all_genes = {
+  "ESCRT-0": ["HGS", "STAM", "STAM2"],
+  "ESCRT-I": ["MVB12A", "MVB12B", "TSG101", "UBAP1", "VPS28", "VPS37A", "VPS37B", "VPS37C", "VPS37D"],
+  "ESCRT-II": ["SNF8", "VPS25", "VPS36"],
+  "ESCRT-III": ["CHMP2A", "CHMP2B", "CHMP3", "CHMP4A", "CHMP4B", "CHMP4C", "CHMP6"],
+  "ESCRT-IV": ["VPS4A","VPS4B","VTA1"],
+  "ESCRT-independent": ["RAB31", "SMPD3"],
+  "EV release gene markers": ["RAB27A", "RAB27B", "RAB11A", "RAB11B", "RAB3A", "RAB3B", "RAB3C", "RAB3D", "RAB7A", "RAB7B"],
+  "tetraspanins": ["CD9", "CD63", "CD81", "ALIX", "SDCBP"],
+  "accessory": ["PDCD6IP", "SDCBP", "SDC1", "SDC2", "SDC3", "SDC4"]
+}
 
 ## define a function for the data extraction
 def gene_x_sample_view(
@@ -270,6 +192,140 @@ def gene_x_sample_view(
     .set_index("index")
   )
 
+# Initialize a dictionary to store the DataFrames for each gene group.
+extracted_gene_dfs = {}
+
+# Iterate over each gene group defined in the all_genes dictionary.
+for group_name, gene_list_for_group in all_genes.items():
+  # Use the pre-defined gene_x_sample_view function to extract and format data
+  df_group = gene_x_sample_view(
+    sc_dat_obj=sc_dat,
+    gene_list=gene_list_for_group,
+    cols_of_interest={"index", "lineage", "celltype", "cyclephase"}
+  )
+  
+  # Store the resulting DataFrame in the dictionary, keyed by the group name.
+  extracted_gene_dfs[group_name] = df_group
+# Convert the dictionary of DataFrames into a single DataFrame.
+all_gene_df = pd.concat(extracted_gene_dfs, names=['gene_group', 'index']).reset_index()
+
+```
+
+```{python}
+#| df-print: paged
+# Perform Kruskal-Wallis test to test significance of expression differences across cycle phases
+
+def kruskal_wallis_test(df):
+  # If all norm_expr values are identical for this gene/celltype, Kruskal-Wallis is not meaningful
+  if df["norm_expr"].nunique() == 1:
+    return pd.Series({"h_statistic": np.nan, "p_value": np.nan})
+
+  # Group by cyclephase and get norm_expr for each group
+  groups = [group["norm_expr"].values for name, group in df.groupby("cyclephase")]
+  
+  # Perform Kruskal-Wallis test if there are at least two groups to compare
+  if len(groups) > 1:
+    h_stat, p_val = kruskal(*groups)
+    return pd.Series({"h_statistic": h_stat, "p_value": p_val})
+  else:
+    # Not enough groups to perform the test
+    return pd.Series({"h_statistic": np.nan, "p_value": np.nan})
+
+# Apply the test to each gene, celltype, and gene_group combination
+kruskal_results = (
+  all_gene_df
+  .groupby(["gene_group", "gene_id", "celltype"]) # Added "gene_group" here
+  .apply(kruskal_wallis_test)
+  .reset_index()
+  .dropna()
+  .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
+  .assign(significant=lambda x: x["p_value"] < 0.05)
+)
+
+# Display as HTML table for better Quarto rendering
+kruskal_results
+```
+
+```{python}
+#| df-print: paged
+# Perform Pearson's rank correlation test
+
+# Define the cycle phases of interest and their numeric mapping.
+# This aligns with plot_gene_list and the dummy variable description from the problem statement.
+cycle_phases_for_correlation = ["EP", "ES", "MS", "LS"]
+cycle_phase_to_numeric_map = {
+  "EP": 0,  # Proliferative (Early)
+  "ES": 1,  # Early-Secretory
+  "MS": 2,  # Mid-Secretory
+  "LS": 3   # Late-Secretory
+}
+
+# Filter `all_gene_df` for the relevant cycle phases.
+# Create a numeric representation of cyclephase for correlation.
+# Make a copy to avoid SettingWithCopyWarning on `all_gene_df`.
+df_for_correlation = all_gene_df[all_gene_df['cyclephase'].isin(cycle_phases_for_correlation)].copy()
+
+# Ensure 'cyclephase' is string type before mapping to handle potential categorical types correctly.
+df_for_correlation['cyclephase'] = df_for_correlation['cyclephase'].astype(str)
+df_for_correlation['cyclephase_numeric'] = df_for_correlation['cyclephase'].map(cycle_phase_to_numeric_map)
+
+# Define the Pearson correlation test function
+def pearson_correlation_test(df_group):
+  # df_group contains 'cyclephase_numeric' and 'norm_expr' for a specific gene/celltype combination.
+  
+  # Prepare data for correlation: drop rows with NaNs in essential columns.
+  # `norm_expr` might have NaNs if source data did; `cyclephase_numeric` should be clean due to pre-filtering and mapping.
+  clean_df = df_group[['cyclephase_numeric', 'norm_expr']].dropna()
+
+  # Check for sufficient data and variance after cleaning.
+  # Pearson correlation requires at least 2 unique values for both variables and typically at least 3 data points.
+  if clean_df['norm_expr'].nunique() < 2 or \
+     clean_df['cyclephase_numeric'].nunique() < 2 or \
+     len(clean_df) < 3:
+    return pd.Series({'correlation_coefficient': np.nan, 'p_value': np.nan})
+      
+  # Perform Pearson correlation
+  try:
+    corr, p_val = pearsonr(clean_df['cyclephase_numeric'], clean_df['norm_expr'])
+    return pd.Series({'correlation_coefficient': corr, 'p_value': p_val})
+  except ValueError: 
+    # This might occur in edge cases not caught by nunique/length checks (e.g., zero variance after cleaning).
+    return pd.Series({'correlation_coefficient': np.nan, 'p_value': np.nan})
+
+# Apply the Pearson correlation test to each group.
+# Groups are defined by gene_group, gene_id, and celltype.
+# `observed=True` is good practice for groupby with categorical data.
+pearson_results = (
+  df_for_correlation
+  .groupby(["gene_group", "gene_id", "celltype"], observed=True) 
+  .apply(pearson_correlation_test)
+  .reset_index()
+  .dropna()  # Remove rows where the test could not be performed (returned NaNs)
+  .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
+  .assign(significant=lambda x: x["p_value"] < 0.05) # Add a significance flag
+)
+
+pearson_results
+```
+
+## The expression of the genes throughout the cycle
+
+Here we first subset the single-cell atlas per following criteria:
+
+* We filter out samples with "Whole Uterus" biopsy type
+* Filter out celltypes marked as "dHormones", "eHormones" and "sHormones"
+
+For gene comparison, we use the normalised counts from the scRNA-seq HECA dataset. These counts are normalised via Pearson residuals-based variance-stabilizing transformation [related article](https://www.nature.com/articles/s41592-023-01814-1#MOESM3).
+
+Following this, well look at all the different cycle phases that are also represented in the UF dataset:
+
+* EP or Early-Proliferative as "pro"/"Proliferative"
+* LP or Late-Proliferative as "pro"/"Proliferative"
+* ES or Early-Secretory as "pre"/"Pre-receptive"
+* MS or Mid-Secretory as "rec"/"Receptive"
+* LS or Late-Secretory as "post"/"Post-receptive"
+
+```{python}
 
 ## create a plotting function for gene lists
 def plot_gene_list(
@@ -320,7 +376,7 @@ def plot_gene_list(
 
 ::: {.panel-tabset}
 
-## Implantation DE
+### Implantation DE
 
 First lets look at the expression changes of **implantation or implantation failure DE genes** throughout the menstrual cycle for every major cell typ.
 
@@ -328,129 +384,91 @@ First lets look at the expression changes of **implantation or implantation fail
 plot_gene_list(sc_dat, clin_de_genes, wrap_rows=11)
 ```
 
-## ESCRT-0
+### ESCRT-0
 
 Then, we have ESCRT-0 complex markers to investigate: HGS, STAM, STAM2
 
 ```{python}
-gene_selection=["HGS", "STAM", "STAM2"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["ESCRT-0"], wrap_rows=2)
 ```
 
-## ESCRT-I
+### ESCRT-I
 
 ESCRT-I complex markers: MVB12A,MVB12B,TSG101,UBAP1,VPS28,VPS37A,VPS37B,VPS37C,VPS37D
 
 ```{python}
-gene_selection=["MVB12A", "MVB12B", "TSG101", "UBAP1", "VPS28", "VPS37A", "VPS37B", "VPS37C", "VPS37D"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=3)
+plot_gene_list(sc_dat, all_genes["ESCRT-I"], wrap_rows=3)
 ```
 
-## ESCRT-II
+### ESCRT-II
 
 ESCRT-II complex markers: SNF8, VPS25, VPS36
 
 ```{python}
-gene_selection=["SNF8", "VPS25", "VPS36"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["ESCRT-II"], wrap_rows=2)
 ```
 
-## ESCRT-III
+### ESCRT-III
 
 ESCRT-III complex markers: CHMP2A, CHMP2B, CHMP3, CHMP4A, CHMP4B, CHMP4C, CHMP6
 
 ```{python}
-gene_selection=["CHMP2A", "CHMP2B", "CHMP3", "CHMP4A", "CHMP4B", "CHMP4C", "CHMP6"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=3)
+plot_gene_list(sc_dat, all_genes["ESCRT-III"], wrap_rows=3)
 ```
 
-## ESCRT-IV
+### ESCRT-IV
 
 ESCRT-III complex markers: VPS4A,VPS4B,VTA1
 
 ```{python}
-gene_selection=["VPS4A","VPS4B","VTA1"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["ESCRT-IV"], wrap_rows=2)
 ```
 
-## ESCRT-independent
+### ESCRT-independent
 
 ESCRT-independent EV-associated markers: RAB31, SMPD3 (nSMASE2)
 
 ```{python}
-# sc_dat.var.index[sc_dat.var.index.str.contains("SMPD")]
-gene_selection=["RAB31", "SMPD3"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["ESCRT-independent"], wrap_rows=2)
 ```
 
-## EV release gene markers
+### EV release gene markers
 
-Variations of RAB27, RAB11, RAB3, RAB7
+Variations of RAB27, RAB11, RAB3, RAB7, split into two groups for better visualisation
 
 ```{python}
 # sc_dat.var.index[sc_dat.var.index.str.contains("RAB")]
-gene_selection=["RAB27A", "RAB27B", "RAB11A", "RAB11B"]
+gene_selection=all_genes["EV release gene markers"][:4]
 plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
 ```
 
 ```{python}
-gene_selection=["RAB3A", "RAB3B", "RAB3C", "RAB3D", "RAB7A", "RAB7B"]
+gene_selection=all_genes["EV release gene markers"][4:]
 plot_gene_list(sc_dat, gene_selection, wrap_rows=3)
 ```
 
-## Tetraspanins
+### Tetraspanins
 
 Tetraspanins and other cargo markers: CD9, CD63, CD81, ALIX, SDCBP
 
 ```{python}
-gene_selection=["CD9", "CD63", "CD81", "ALIX", "SDCBP"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["tetraspanins"], wrap_rows=2)
 ```
 
-## Accessory
+### Accessory
 
 Accessory markers PDCD6IP, SDCBP (syntenin-1), SDC (syndecan)
 
 ```{python}
-gene_selection=["PDCD6IP", "SDCBP", "SDC1", "SDC2", "SDC3", "SDC4"]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["accessory"], wrap_rows=2)
 ```
 
-## log-shift - ESCRT-III
+### All the genes combined
 
-For comparison, here we transform the matrix with a simple shifted log-tranformation and see how the reads for the ESCRT 3 complex look in comparison.
+Finally, we can look at all the genes combined. This is a bit of a mess, but it shows the expression of all the genes throughout the cycle.
 
 ```{python}
-## switch the expression matrix to raw counts if the matrix is preprocessed
-sc_dat_tmp = sc_dat.copy()
-sc_dat_tmp.X = sc_dat_tmp.layers["counts"]
-del sc_dat_tmp.layers["counts"]
-sc_dat_tmp = ov.pp.preprocess(sc_dat_tmp, mode="shiftlog|pearson", n_HVGs=3000, target_sum=50*1e4)
-```
 
-```{python}
-gene_selection=["CHMP2A", "CHMP2B", "CHMP3", "CHMP4A", "CHMP4B", "CHMP4C", "CHMP6"]
-tmp_plt = plot_gene_list(sc_dat_tmp, gene_selection, wrap_rows=3)
-del sc_dat_tmp
-tmp_plt.plot()
 ```
-
-From first comparison it looks like the pearson method is better at making different cell profiles comparable with each other, all the while both methods preserve the relative expression levels between cycle phase groups.
 
 :::
-
-# Differential analysis to detect significant EV biogenesis genes
-
-Here we perform DE analysis for the HECA single cell dataset and subset the genesets for the EV biogenesis markers. This would validate the expression of genes between early to late phase cycle phases and indicate which tissues mostly contribute to the EV outcome.
-
-For this we look at the following results:
-
-1. What cell type comparisons have significant differential expression for EV biogenesis markers? Look at groups of markers and measure their differential enrichment between cell type comparisons. Some ideas on how to visualise these results:
-   1. Rangeplot per EV biogenesis group on logfold scale. Use only significant genes from each group and summarise results over all the celltype comparisons. Then plot points of those genes on the logfold scale and group them by the biogenesis group. Optionally color based on the DE comparison, or shape based on the signf threshold.
-   2. Just plot the expression of only signf DE genes and comparison tissues throughout the menstrual cycle as done above.
-
-```{python}
-
-
-
-```
