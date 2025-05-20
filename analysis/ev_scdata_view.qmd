@@ -25,6 +25,7 @@ import numpy as np
 import seaborn as sns
 import seaborn.objects as so
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from scipy.stats import kruskal
 from scipy.stats import pearsonr
 from pathlib import Path
@@ -280,10 +281,9 @@ def pearson_correlation_test(df_group):
   # Check for sufficient data and variance after cleaning.
   # Pearson correlation requires at least 2 unique values for both variables and typically at least 3 data points.
   if clean_df['norm_expr'].nunique() < 2 or \
-     clean_df['cyclephase_numeric'].nunique() < 2 or \
-     len(clean_df) < 3:
+    clean_df['cyclephase_numeric'].nunique() < 2 or \
+    len(clean_df) < 3:
     return pd.Series({'correlation_coefficient': np.nan, 'p_value': np.nan})
-      
   # Perform Pearson correlation
   try:
     corr, p_val = pearsonr(clean_df['cyclephase_numeric'], clean_df['norm_expr'])
@@ -297,7 +297,7 @@ def pearson_correlation_test(df_group):
 # `observed=True` is good practice for groupby with categorical data.
 pearson_results = (
   df_for_correlation
-  .groupby(["gene_group", "gene_id", "celltype"], observed=True) 
+  .groupby(["gene_group", "gene_id", "celltype", "lineage"], observed=True) 
   .apply(pearson_correlation_test)
   .reset_index()
   .dropna()  # Remove rows where the test could not be performed (returned NaNs)
@@ -306,6 +306,81 @@ pearson_results = (
 )
 
 pearson_results
+```
+
+Now we will do a heatmap of the Pearson expression correlation results. This will show the correlation of the expression of the genes with the cycle phase. On the x-axis we have the cycle phase, and on the y-axis we have the genes. The colour of the cells will show the correlation coefficient. The darker the colour, the stronger the correlation.
+
+```{python}
+
+# Pivot the pearson_results table for the heatmap
+# Index by 'celltype', columns by 'gene_id'
+heatmap_data = pearson_results.pivot_table(
+  index="celltype",
+  columns="gene_id",
+  values="correlation_coefficient"
+)
+
+# Create a color palette for the 'lineage' column
+lineage_colors = sns.color_palette("tab10", n_colors=len(pearson_results['lineage'].unique()))
+
+# Map each unique lineage to a color
+lineage_color_map = dict(zip(pearson_results['lineage'].unique(), lineage_colors))
+
+# Convert the lineage to a color for each row
+row_colors = heatmap_data.index.map(sc_dat.obs.groupby("celltype")["lineage"].apply(lambda x: x.iloc[0]).map(lineage_color_map))
+
+# Create a color palette for the 'gene_group' column
+gene_group_colors = sns.color_palette("husl", n_colors=len(pearson_results['gene_group'].unique()))
+
+# Map each unique gene_group to a color
+gene_group_color_map = dict(zip(pearson_results['gene_group'].unique(), gene_group_colors))
+
+# Convert the gene_group to a color for each column
+col_colors = heatmap_data.columns.map(all_gene_df.groupby("gene_id")["gene_group"].apply(lambda x: x.iloc[0]).map(gene_group_color_map))
+
+# Plot the clustermap
+# Dynamically adjust figsize based on the number of rows/columns
+fig_width = max(12, len(heatmap_data.columns) * 0.35)
+fig_height = max(10, len(heatmap_data.index) * 0.3)
+
+g = sns.clustermap(
+  heatmap_data.fillna(0),  # Fill NaNs in the main heatmap data (e.g., with 0)
+  cmap="vlag",             # Diverging colormap suitable for correlations (-1 to 1)
+  figsize=(fig_width, fig_height),
+  row_colors=row_colors,
+  col_colors=col_colors,
+  # dendrogram_ratio=(.05, .15), # Adjust space for dendrograms
+  cbar_pos=(.08, 0.82, 0.05, 0.14), # position of the colorbar
+  xticklabels=True,        # Show gene_id labels on x-axis
+  yticklabels=True        # Show celltype labels on y-axis
+)
+
+# Customize plot appearance
+g.ax_heatmap.set_xlabel("Gene ID", fontsize=12)
+g.ax_heatmap.set_ylabel("Celltype", fontsize=12) # Updated y-axis label
+
+# Rotate x-axis labels for better readability
+plt.setp(g.ax_heatmap.get_xticklabels(), rotation=90)
+
+# Add legend for row colors (lineage)
+row_handles = [mpatches.Patch(color=color, label=lineage) for lineage, color in lineage_color_map.items()]
+row_legend = g.ax_row_dendrogram.legend(
+  handles=row_handles, title="Lineage", loc="right",
+  bbox_to_anchor=(6.265, .6), frameon=False
+  )
+
+# Update the plot after adding the first legend
+plt.draw()
+
+# Add legend for column colors (gene_group)
+col_handles = [mpatches.Patch(color=color, label=gene_group) for gene_group, color in gene_group_color_map.items()]
+col_legend = g.ax_col_dendrogram.legend(
+  handles=col_handles, title="Gene Group", loc="right",
+  bbox_to_anchor=(1.4, -.7), frameon=False
+  )
+
+# Show plot
+plt.show()
 ```
 
 ## The expression of the genes throughout the cycle
@@ -326,51 +401,98 @@ Following this, well look at all the different cycle phases that are also repres
 * LS or Late-Secretory as "post"/"Post-receptive"
 
 ```{python}
-
-## create a plotting function for gene lists
 def plot_gene_list(
-  sc_dat, 
-  gene_list, 
-  wrap_rows=3,
-  cycle_filt=["EP", "ES", "MS", "LS"],
-  biopsy_type_filt=["Whole_Uterus"]
-  ):
-  sc_obs_tmp = gene_x_sample_view(
-      sc_dat[
-        sc_dat.obs
-          .query("Biopsy_type not in @biopsy_type_filt & cyclephase in @cycle_filt")
-          .index
-      ],
+  sc_dat,
+  gene_list,
+  stat_table=None,
+  wrap_rows=3
+):
+  cycle_order = ["EP", "LP", "ES", "MS", "LS"]
+  
+  # Extract and prepare expression data
+  extracted_data = (
+    gene_x_sample_view(
+      sc_dat_obj=sc_dat,
       gene_list=gene_list,
       cols_of_interest={"index", "lineage", "celltype", "cyclephase"}
-    ).assign(cyclephase=lambda x:
-        x.cyclephase.astype("str").astype("category").cat.reorder_categories(cycle_filt, ordered=True)
     )
-
-  ## precalculate stat
-  return (
-    so.Plot(
-      (
-        sc_obs_tmp
-        .groupby(["gene_id", "cyclephase", "lineage"])
-        .agg({"norm_expr": ['mean', 'min', 'max', 'sem']})
-        .droplevel(0, axis=1)
-        .reset_index()
-        .assign(se_min=lambda x: x["mean"] - x["sem"], se_max=lambda x: x["mean"] + x["sem"])
-      ),
-      x="cyclephase",
-      y="mean",
-      ymin="se_min",
-      ymax="se_max",
-      color="lineage"
-    )
-    # .layout(size=(9,12))
-    .add(so.Line())
-    .add(so.Band(alpha=.2))
-    .facet(None, "gene_id", wrap=wrap_rows)
-    .share(y=False)
-    .theme(sns.axes_style("white") | sns.plotting_context("notebook"))
+    .query("cyclephase in @cycle_order")
+    .assign(cyclephase=lambda df: pd.Categorical(df["cyclephase"], categories=cycle_order, ordered=True))
   )
+  
+  # Get significant genes set
+  significant_genes = set() if stat_table is None else set(
+    stat_table.query("gene_id in @gene_list & significant == True")["gene_id"]
+  )
+
+  # Group data and calculate mean expression
+  grouped_data = (
+    extracted_data
+    .groupby(["gene_id", "celltype", "cyclephase", "lineage"], observed=True)
+    .agg(norm_expr_mean=("norm_expr", "mean"))
+    .reset_index()
+    .assign(
+      cyclephase_num=lambda df: df['cyclephase'].map({phase: i for i, phase in enumerate(cycle_order)}),
+    )
+  )
+  
+  # Join with stat_table if provided
+  if stat_table is not None:
+    grouped_data = grouped_data.merge(
+      stat_table[["gene_id", "celltype", "significant"]].drop_duplicates(),
+      on=["gene_id", "celltype"],
+      how="left"
+    )
+    grouped_data["significant"] = grouped_data["significant"].fillna(False)
+  else:
+    grouped_data["significant"] = False
+  
+  # Create x-position offsets for dodging by lineage
+  unique_lineages = sorted(grouped_data['lineage'].unique())
+  offsets = np.linspace(-0.2, 0.2, len(unique_lineages)) if len(unique_lineages) > 1 else [0]
+  lineage_offsets = dict(zip(unique_lineages, offsets))
+  
+  # Add dodged x-coordinates
+  grouped_data['x_dodged'] = grouped_data.apply(
+    lambda row: row['cyclephase_num'] + lineage_offsets[row['lineage']], axis=1
+  )
+
+  # Create facet grid plot
+  g = sns.FacetGrid(
+    grouped_data,
+    col="gene_id",
+    col_wrap=wrap_rows,
+    height=3, aspect=1.2,
+    sharex=True,
+    sharey=False
+  )
+
+  # Add scatter plots with dodged positions
+  g.map_dataframe(
+    sns.scatterplot,
+    x="x_dodged",
+    y="norm_expr_mean",
+    hue="lineage",
+    style="significant",
+    alpha=0.5,
+    s=50
+  )
+
+  # Add labels and customize ticks
+  g.set_titles(col_template="{col_name}")
+  for ax in g.axes.flat:
+    ax.set_xticks(range(len(cycle_order)))
+    ax.set_xticklabels(cycle_order)
+  
+  g.set_axis_labels("Cycle Phase", "Mean Normalized Expression")
+  g.add_legend(bbox_to_anchor=(1.08, 0.5), loc="center")
+  plt.tight_layout()
+
+  return g
+
+
+# kruskal_results
+plot_gene_list(sc_dat, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_rows=2)
 
 ```
 
@@ -381,7 +503,7 @@ def plot_gene_list(
 First lets look at the expression changes of **implantation or implantation failure DE genes** throughout the menstrual cycle for every major cell typ.
 
 ```{python}
-plot_gene_list(sc_dat, clin_de_genes, wrap_rows=11)
+plot_gene_list(sc_dat, clin_de_genes, stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### ESCRT-0
@@ -389,7 +511,7 @@ plot_gene_list(sc_dat, clin_de_genes, wrap_rows=11)
 Then, we have ESCRT-0 complex markers to investigate: HGS, STAM, STAM2
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-0"], wrap_rows=2)
+plot_gene_list(sc_dat, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### ESCRT-I
@@ -397,7 +519,7 @@ plot_gene_list(sc_dat, all_genes["ESCRT-0"], wrap_rows=2)
 ESCRT-I complex markers: MVB12A,MVB12B,TSG101,UBAP1,VPS28,VPS37A,VPS37B,VPS37C,VPS37D
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-I"], wrap_rows=3)
+plot_gene_list(sc_dat, all_genes["ESCRT-I"], stat_table=kruskal_results, wrap_rows=3)
 ```
 
 ### ESCRT-II
