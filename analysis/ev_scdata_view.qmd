@@ -1,12 +1,13 @@
 ---
-title: "Single cell perspective into Extracellular Vesicules"
+title: "Single cell perspective into Extracellular Vesicules Biogenesis markers"
 format:
   html:
     code-fold: true
     code-tools: true
     embed-resources: true
     self-contained-math: true
-jupyter: python3
+jupyter-binary: /home/allu/.conda/envs/endo_ev/bin/jupyter
+python-binary: /home/allu/.conda/envs/endo_ev/bin/python3
 ---
 
 # Load in data
@@ -16,9 +17,11 @@ Set up the environment and load the deps:
 ```{python}
 #| output: false
 
+import sys
+print(sys.executable)
+
 import re
 import pandas as pd
-pd.set_option('display.max_columns', 100)
 import scanpy as sc
 import anndata as an
 import numpy as np
@@ -26,12 +29,21 @@ import seaborn as sns
 import seaborn.objects as so
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+pd.set_option('display.max_columns', 100)
+
 from scipy.stats import kruskal
-from scipy.stats import pearsonr
+from scipy.stats import spearmanr, pearsonr
 from pathlib import Path
 from os import getenv
 from dotenv import load_dotenv
 from os.path import expanduser
+
+# make tables look nice
+import itables
+itables.options.lengthMenu = [15]
+# # use a smaller font (default is medium)
+from IPython.display import display, HTML
+display(HTML("<style>.dt-container { font-size: small; }</style>"))
 
 ## load the environment variables from the .env file
 load_dotenv()
@@ -50,8 +62,7 @@ Load in the HECA dataset.
 #| output: false
 
 ## load in the modified HECA atlas
-sc_dat = an.read_h5ad(snapshot_an_loc)
-
+sc_dat = an.read_h5ad(snapshot_an_loc, backed="r")
 ```
 
 Load in the bulk data from the EV and biopsy samples
@@ -126,7 +137,7 @@ clin_uf_raw = clin_uf_raw.loc[:, clin_uf_pheno.index]
 Check out the number of cells in each dataset with the origin of the cell.
 
 ```{python}
-sns.displot(sc_dat.obs, x="dataset", hue="Stage", multiple="stack").set_xticklabels(rotation=90)
+sns.displot(sc_dat.obs, x="dataset", hue="cyclephase", multiple="stack").set_xticklabels(rotation=90)
 ```
 
 Or just comparison between celltypes in different HECA datasets
@@ -181,54 +192,12 @@ def gene_x_sample_view(
   )
 
 def normalize_expr_by_cell_count(df_from_gene_view):
-  """
-  Normalizes the 'norm_expr' column of a DataFrame (output of gene_x_sample_view)
-  by the number of unique cells within each celltype and cyclephase group.
-
-  The input DataFrame is expected to have an index named 'index' (cell ID),
-  and columns 'norm_expr', 'celltype', and 'cyclephase'.
-
-  Args:
-    df_from_gene_view (pd.DataFrame): DataFrame, typically from gene_x_sample_view.
-
-  Returns:
-    pd.DataFrame: The DataFrame with an added column 'norm_expr_by_cell_count'.
-  """
-  # Validate required columns and index name
-  if not {'celltype', 'cyclephase'}.issubset(df_from_gene_view.columns):
-    raise ValueError("Input DataFrame must contain 'celltype' and 'cyclephase' columns.")
-  if df_from_gene_view.index.name != 'index':
-    # If this error occurs, it means the assumption about gene_x_sample_view's output index name is wrong
-    # or the input df is not directly from gene_x_sample_view.
-    raise ValueError("Input DataFrame must have an index named 'index' (representing cell ID).")
-
-  # Reset index to use cell ID ('index' column) in operations
-  df_reset = df_from_gene_view.reset_index() # Cell IDs are now in a column named 'index'
-
-  # Determine unique cells and their 'celltype' and 'cyclephase'
-  # The 'index' column in df_reset contains the cell identifiers.
-  unique_cells_df = df_reset[['index', 'celltype', 'cyclephase']].drop_duplicates()
-
-  # Calculate the number of unique cells for each (celltype, cyclephase) combination
-  # Using observed=True is good practice if 'celltype' or 'cyclephase' are categorical
-  cell_counts = (
-    unique_cells_df.groupby(['celltype', 'cyclephase'], observed=True)['index']
-    .count()
-    .rename('num_cells_in_group')
-    .reset_index() # Convert grouped output back to DataFrame
-  )
-  
-  # Merge these counts back to the main data
-  df_merged = pd.merge(df_reset, cell_counts, on=['celltype', 'cyclephase'], how='left')
-  
-  # Calculate the normalized expression
-  # This creates a new column; it does not overwrite 'norm_expr'
-  df_merged['norm_expr_by_cell_count'] = df_merged['norm_expr'] / df_merged['num_cells_in_group']
-  
-  # Restore the original index (the cell ID column, named 'index')
-  df_final = df_merged.set_index('index')
-      
-  return df_final
+  df = df_from_gene_view.copy()
+  num_cells_per_group = df.groupby(['celltype', 'cyclephase'], observed=True)['norm_expr'].transform(lambda x: x.index.nunique())
+  df['norm_expr'] /= num_cells_per_group
+  df['norm_expr'] *= 1e6 # make these numbers more readable by multiplying by 1e6
+  df['norm_expr'] = np.log1p(df['norm_expr'])
+  return df
 
 
 ## Create a dictionary of all the genes we want to plot
@@ -259,16 +228,18 @@ for group_name, gene_list_for_group in all_genes.items():
   # Store the resulting DataFrame in the dictionary, keyed by the group name.
   extracted_gene_dfs[group_name] = df_group
 
-df_group = normalize_expr_by_cell_count(df_group)
 # Convert the dictionary of DataFrames into a single DataFrame.
 all_gene_df = pd.concat(extracted_gene_dfs, names=['gene_group', 'index']).reset_index()
+# Normalise the expression by the number of cells in each group
+# Don't do that anymore, as it would introduce a bias in the expression values
+# all_gene_df = normalize_expr_by_cell_count(all_gene_df)
+
+# set the newly normalized expression as the norm_expr and drop the old one
 del extracted_gene_dfs
 ```
 
 ```{python}
-#| df-print: paged
 # Perform Kruskal-Wallis test to test significance of expression differences across cycle phases
-
 def kruskal_wallis_test(df):
   # If all norm_expr values are identical for this gene/celltype, Kruskal-Wallis is not meaningful
   if df["norm_expr"].nunique() == 1:
@@ -294,37 +265,18 @@ kruskal_results = (
   .dropna()
   .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
   .assign(significant=lambda x: x["p_value"] < 0.05)
+  .reset_index(drop=True)
 )
 
-# Display as HTML table for better Quarto rendering
-kruskal_results
+# Display the Kruskal-Wallis test results in a paged format
+itables.show(kruskal_results)
 ```
 
 ```{python}
 #| df-print: paged
-# Perform Pearson's rank correlation test
 
-# Define the cycle phases of interest and their numeric mapping.
-# This aligns with plot_gene_list and the dummy variable description from the problem statement.
-cycle_phases_for_correlation = ["EP", "ES", "MS", "LS"]
-cycle_phase_to_numeric_map = {
-  "EP": 0,  # Proliferative (Early)
-  "ES": 1,  # Early-Secretory
-  "MS": 2,  # Mid-Secretory
-  "LS": 3   # Late-Secretory
-}
-
-# Filter `all_gene_df` for the relevant cycle phases.
-# Create a numeric representation of cyclephase for correlation.
-# Make a copy to avoid SettingWithCopyWarning on `all_gene_df`.
-df_for_correlation = all_gene_df[all_gene_df['cyclephase'].isin(cycle_phases_for_correlation)].copy()
-
-# Ensure 'cyclephase' is string type before mapping to handle potential categorical types correctly.
-df_for_correlation['cyclephase'] = df_for_correlation['cyclephase'].astype(str)
-df_for_correlation['cyclephase_numeric'] = df_for_correlation['cyclephase'].map(cycle_phase_to_numeric_map)
-
-# Define the Pearson correlation test function
-def pearson_correlation_test(df_group):
+# Define the Spearman correlation test function
+def spearman_correlation_test(df_group):
   # df_group contains 'cyclephase_numeric' and 'norm_expr' for a specific gene/celltype combination.
   
   # Prepare data for correlation: drop rows with NaNs in essential columns.
@@ -332,128 +284,18 @@ def pearson_correlation_test(df_group):
   clean_df = df_group[['cyclephase_numeric', 'norm_expr']].dropna()
 
   # Check for sufficient data and variance after cleaning.
-  # Pearson correlation requires at least 2 unique values for both variables and typically at least 3 data points.
+  # Spearman correlation requires at least 2 unique values for both variables and typically at least 3 data points.
   if clean_df['norm_expr'].nunique() < 2 or \
-     clean_df['cyclephase_numeric'].nunique() < 2 or \
-     len(clean_df) < 3:
+    clean_df['cyclephase_numeric'].nunique() < 2 or \
+    len(clean_df) < 3:
     return pd.Series({'correlation_coefficient': np.nan, 'p_value': np.nan})
-      
-  # Perform Pearson correlation
+  # Perform Spearman correlation
   try:
-    corr, p_val = pearsonr(clean_df['cyclephase_numeric'], clean_df['norm_expr'])
+    corr, p_val = spearmanr(clean_df['cyclephase_numeric'], clean_df['norm_expr'])
     return pd.Series({'correlation_coefficient': corr, 'p_value': p_val})
   except ValueError: 
     # This might occur in edge cases not caught by nunique/length checks (e.g., zero variance after cleaning).
     return pd.Series({'correlation_coefficient': np.nan, 'p_value': np.nan})
-
-# Apply the Pearson correlation test to each group.
-# Groups are defined by gene_group, gene_id, and celltype.
-# `observed=True` is good practice for groupby with categorical data.
-pearson_results = (
-  df_for_correlation
-  .groupby(["gene_group", "gene_id", "celltype"], observed=True) 
-  .apply(pearson_correlation_test)
-  .reset_index()
-  .dropna()  # Remove rows where the test could not be performed (returned NaNs)
-  .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
-  .assign(significant=lambda x: x["p_value"] < 0.05) # Add a significance flag
-)
-
-pearson_results
-```
-
-## The expression of the genes throughout the cycle
-
-Here we first subset the single-cell atlas per following criteria:
-
-* We filter out samples with "Whole Uterus" biopsy type
-* Filter out celltypes marked as "dHormones", "eHormones" and "sHormones"
-
-For gene comparison, we use the normalised counts from the scRNA-seq HECA dataset. These counts are normalised via Pearson residuals-based variance-stabilizing transformation [related article](https://www.nature.com/articles/s41592-023-01814-1#MOESM3).
-
-Following this, well look at all the different cycle phases that are also represented in the UF dataset:
-
-* EP or Early-Proliferative as "pro"/"Proliferative"
-* LP or Late-Proliferative as "pro"/"Proliferative"
-* ES or Early-Secretory as "pre"/"Pre-receptive"
-* MS or Mid-Secretory as "rec"/"Receptive"
-* LS or Late-Secretory as "post"/"Post-receptive"
-
-```{python}
-
-# Iterate over each gene group defined in the all_genes dictionary.
-for group_name, gene_list_for_group in all_genes.items():
-  # Use the pre-defined gene_x_sample_view function to extract and format data
-  df_group = gene_x_sample_view(
-    sc_dat_obj=sc_dat,
-    gene_list=gene_list_for_group,
-    cols_of_interest={"index", "lineage", "celltype", "cyclephase"}
-  )
-  
-  # Store the resulting DataFrame in the dictionary, keyed by the group name.
-  extracted_gene_dfs[group_name] = df_group
-# Convert the dictionary of DataFrames into a single DataFrame.
-all_gene_df = pd.concat(extracted_gene_dfs, names=['gene_group', 'index']).reset_index()
-
-```
-
-```{python}
-#| df-print: paged
-# Perform Kruskal-Wallis test to test significance of expression differences across cycle phases
-
-def kruskal_wallis_test(df):
-  # If all norm_expr values are identical for this gene/celltype, Kruskal-Wallis is not meaningful
-  if df["norm_expr"].nunique() == 1:
-    return pd.Series({"h_statistic": np.nan, "p_value": np.nan})
-
-  # Group by cyclephase and get norm_expr for each group
-  groups = [group["norm_expr"].values for name, group in df.groupby("cyclephase")]
-  
-  # Perform Kruskal-Wallis test if there are at least two groups to compare
-  if len(groups) > 1:
-    h_stat, p_val = kruskal(*groups)
-    return pd.Series({"h_statistic": h_stat, "p_value": p_val})
-  else:
-    # Not enough groups to perform the test
-    return pd.Series({"h_statistic": np.nan, "p_value": np.nan})
-
-# Apply the test to each gene, celltype, and gene_group combination
-kruskal_results = (
-  all_gene_df
-  .groupby(["gene_group", "gene_id", "celltype"]) # Added "gene_group" here
-  .apply(kruskal_wallis_test)
-  .reset_index()
-  .dropna()
-  .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
-  .assign(significant=lambda x: x["p_value"] < 0.05)
-)
-
-# Display as HTML table for better Quarto rendering
-kruskal_results
-```
-
-```{python}
-#| df-print: paged
-# Perform Pearson's rank correlation test
-
-# Define the cycle phases of interest and their numeric mapping.
-# This aligns with plot_gene_list and the dummy variable description from the problem statement.
-cycle_phases_for_correlation = ["EP", "ES", "MS", "LS"]
-cycle_phase_to_numeric_map = {
-  "EP": 0,  # Proliferative (Early)
-  "ES": 1,  # Early-Secretory
-  "MS": 2,  # Mid-Secretory
-  "LS": 3   # Late-Secretory
-}
-
-# Filter `all_gene_df` for the relevant cycle phases.
-# Create a numeric representation of cyclephase for correlation.
-# Make a copy to avoid SettingWithCopyWarning on `all_gene_df`.
-df_for_correlation = all_gene_df[all_gene_df['cyclephase'].isin(cycle_phases_for_correlation)].copy()
-
-# Ensure 'cyclephase' is string type before mapping to handle potential categorical types correctly.
-df_for_correlation['cyclephase'] = df_for_correlation['cyclephase'].astype(str)
-df_for_correlation['cyclephase_numeric'] = df_for_correlation['cyclephase'].map(cycle_phase_to_numeric_map)
 
 # Define the Pearson correlation test function
 def pearson_correlation_test(df_group):
@@ -477,9 +319,116 @@ def pearson_correlation_test(df_group):
     # This might occur in edge cases not caught by nunique/length checks (e.g., zero variance after cleaning).
     return pd.Series({'correlation_coefficient': np.nan, 'p_value': np.nan})
 
+# Define the cycle phases of interest and their numeric mapping.
+# This aligns with plot_gene_list and the dummy variable description from the problem statement.
+cycle_phases_for_correlation = ["EP", "ES", "MS", "LS"]
+cycle_phase_to_numeric_map = {
+  "EP": 0,  # Proliferative (Early)
+  "ES": 1,  # Early-Secretory
+  "MS": 2,  # Mid-Secretory
+  "LS": 3   # Late-Secretory
+}
+
+# Filter `all_gene_df` for the relevant cycle phases.
+# Create a numeric representation of cyclephase for correlation.
+# Make a copy to avoid SettingWithCopyWarning on `all_gene_df`.
+df_for_correlation = all_gene_df[all_gene_df['cyclephase'].isin(cycle_phases_for_correlation)].copy()
+
+# Ensure 'cyclephase' is string type before mapping to handle potential categorical types correctly.
+df_for_correlation['cyclephase'] = df_for_correlation['cyclephase'].astype(str)
+df_for_correlation['cyclephase_numeric'] = df_for_correlation['cyclephase'].map(cycle_phase_to_numeric_map)
+```
+
+Now we will do a heatmap of the Pearson expression correlation results. This will show the correlation of the expression of the genes with the cycle phase. On the x-axis we have the cycle phase, and on the y-axis we have the genes. The colour of the cells will show the correlation coefficient. The darker the colour, the stronger the correlation.
+
+We will split the cycle phases into two groups - the proliferative endometrium and the decidual endometrium. The proliferative endometrium is the proliferative and early phase, and the decidual endometrium is the early secretory, mid secretory and late secretory phases.
+
+So first, we run pearson correlation for the whole cycle phases, and then we will spearmans linear correlation it for the decidual endometrium.
+
+```{python}
+## Define a function to plot the correlation clustermap
+def plot_correlation_clustermap(pearson_results_df, sc_obs_df):
+  # Pivot the pearson_results table for the heatmap
+  # Index by 'celltype', columns by 'gene_id'
+  heatmap_data = pearson_results_df.pivot_table(
+    index="celltype",
+    columns="gene_id",
+    values="correlation_coefficient"
+  )
+
+  # Create a color palette for the 'lineage' column
+  unique_lineages = pearson_results_df['lineage'].unique()
+  lineage_colors = sns.color_palette("tab10", n_colors=len(unique_lineages))
+  lineage_color_map = dict(zip(unique_lineages, lineage_colors))
+
+  # Map each unique lineage to a color
+  # Get the first lineage for each celltype (assuming consistent lineage per celltype)
+  celltype_to_lineage = sc_obs_df.groupby("celltype")["lineage"].first()
+  row_colors = [lineage_color_map.get(celltype_to_lineage.get(celltype)) for celltype in heatmap_data.index]
+
+
+  # Create a color palette for the 'gene_group' column
+  unique_gene_groups = pearson_results_df['gene_group'].unique()
+  gene_group_colors = sns.color_palette("husl", n_colors=len(unique_gene_groups))
+  gene_group_color_map = dict(zip(unique_gene_groups, gene_group_colors))
+
+  # Map each unique gene_group to a color
+  # Get the first gene_group for each gene_id (assuming consistent gene_group per gene_id)
+  # Use pearson_results_df to get the gene_group for each gene_id
+  geneid_to_genegroup = pearson_results_df.groupby("gene_id")["gene_group"].first()
+  col_colors = [gene_group_color_map.get(geneid_to_genegroup.get(gene_id)) for gene_id in heatmap_data.columns]
+  
+  # Plot the clustermap
+  # Dynamically adjust figsize based on the number of rows/columns
+  fig_width = max(12, len(heatmap_data.columns) * 0.35)
+  fig_height = max(10, len(heatmap_data.index) * 0.3)
+
+  g = sns.clustermap(
+    heatmap_data.fillna(0),  # Fill NaNs in the main heatmap data (e.g., with 0)
+    cmap="vlag",             # Diverging colormap suitable for correlations (-1 to 1)
+    figsize=(fig_width, fig_height),
+    row_colors=row_colors,
+    col_colors=col_colors,
+    cbar_pos=(.08, 0.82, 0.05, 0.14), # position of the colorbar
+    xticklabels=True,        # Show gene_id labels on x-axis
+    yticklabels=True         # Show celltype labels on y-axis
+  )
+
+  # Customize plot appearance
+  g.ax_heatmap.set_xlabel("Gene ID", fontsize=12)
+  g.ax_heatmap.set_ylabel("Celltype", fontsize=12)
+
+  # Rotate x-axis labels for better readability
+  plt.setp(g.ax_heatmap.get_xticklabels(), rotation=90)
+
+  # Add legend for row colors (lineage)
+  row_handles = [mpatches.Patch(color=color, label=lineage) for lineage, color in lineage_color_map.items() if lineage is not np.nan]
+  if row_handles:
+    g.ax_row_dendrogram.legend(
+      handles=row_handles, title="Lineage", loc="right",
+      bbox_to_anchor=(6.265, .6), frameon=False
+    )
+
+  # Add legend for column colors (gene_group)
+  col_handles = [mpatches.Patch(color=color, label=gene_group) for gene_group, color in gene_group_color_map.items() if gene_group is not np.nan]
+  if col_handles:
+    g.ax_col_dendrogram.legend(
+      handles=col_handles, title="Gene Group", loc="right",
+      bbox_to_anchor=(1.4, -.7), frameon=False
+    )
+
+  plt.show()
+```
+
+:::{.panel-tabset}
+
+### Over all the cycle phases
+
+```{python}
+# Call the heatmap plotting function with the appropriate DataFrames
+
 # Apply the Pearson correlation test to each group.
 # Groups are defined by gene_group, gene_id, and celltype.
-# `observed=True` is good practice for groupby with categorical data.
 pearson_results = (
   df_for_correlation
   .groupby(["gene_group", "gene_id", "celltype", "lineage"], observed=True) 
@@ -490,83 +439,46 @@ pearson_results = (
   .assign(significant=lambda x: x["p_value"] < 0.05) # Add a significance flag
 )
 
-pearson_results
+plot_correlation_clustermap(pearson_results, sc_dat.obs)
 ```
 
-Now we will do a heatmap of the Pearson expression correlation results. This will show the correlation of the expression of the genes with the cycle phase. On the x-axis we have the cycle phase, and on the y-axis we have the genes. The colour of the cells will show the correlation coefficient. The darker the colour, the stronger the correlation.
+### Early endometrium
 
 ```{python}
-
-# Pivot the pearson_results table for the heatmap
-# Index by 'celltype', columns by 'gene_id'
-heatmap_data = pearson_results.pivot_table(
-  index="celltype",
-  columns="gene_id",
-  values="correlation_coefficient"
+# Groups are defined by gene_group, gene_id, and celltype.
+spearman_results = (
+  df_for_correlation
+  .query("cyclephase in ['EP', 'EP', 'ES']") ## !!! the important cycle phase selectio
+  .groupby(["gene_group", "gene_id", "celltype", "lineage"], observed=True) 
+  .apply(pearson_correlation_test)
+  .reset_index()
+  .dropna()  # Remove rows where the test could not be performed (returned NaNs)
+  .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
+  .assign(significant=lambda x: x["p_value"] < 0.05) # Add a significance flag
 )
 
-# Create a color palette for the 'lineage' column
-lineage_colors = sns.color_palette("tab10", n_colors=len(pearson_results['lineage'].unique()))
-
-# Map each unique lineage to a color
-lineage_color_map = dict(zip(pearson_results['lineage'].unique(), lineage_colors))
-
-# Convert the lineage to a color for each row
-row_colors = heatmap_data.index.map(sc_dat.obs.groupby("celltype")["lineage"].apply(lambda x: x.iloc[0]).map(lineage_color_map))
-
-# Create a color palette for the 'gene_group' column
-gene_group_colors = sns.color_palette("husl", n_colors=len(pearson_results['gene_group'].unique()))
-
-# Map each unique gene_group to a color
-gene_group_color_map = dict(zip(pearson_results['gene_group'].unique(), gene_group_colors))
-
-# Convert the gene_group to a color for each column
-col_colors = heatmap_data.columns.map(all_gene_df.groupby("gene_id")["gene_group"].apply(lambda x: x.iloc[0]).map(gene_group_color_map))
-
-# Plot the clustermap
-# Dynamically adjust figsize based on the number of rows/columns
-fig_width = max(12, len(heatmap_data.columns) * 0.35)
-fig_height = max(10, len(heatmap_data.index) * 0.3)
-
-g = sns.clustermap(
-  heatmap_data.fillna(0),  # Fill NaNs in the main heatmap data (e.g., with 0)
-  cmap="vlag",             # Diverging colormap suitable for correlations (-1 to 1)
-  figsize=(fig_width, fig_height),
-  row_colors=row_colors,
-  col_colors=col_colors,
-  # dendrogram_ratio=(.05, .15), # Adjust space for dendrograms
-  cbar_pos=(.08, 0.82, 0.05, 0.14), # position of the colorbar
-  xticklabels=True,        # Show gene_id labels on x-axis
-  yticklabels=True        # Show celltype labels on y-axis
-)
-
-# Customize plot appearance
-g.ax_heatmap.set_xlabel("Gene ID", fontsize=12)
-g.ax_heatmap.set_ylabel("Celltype", fontsize=12) # Updated y-axis label
-
-# Rotate x-axis labels for better readability
-plt.setp(g.ax_heatmap.get_xticklabels(), rotation=90)
-
-# Add legend for row colors (lineage)
-row_handles = [mpatches.Patch(color=color, label=lineage) for lineage, color in lineage_color_map.items()]
-row_legend = g.ax_row_dendrogram.legend(
-  handles=row_handles, title="Lineage", loc="right",
-  bbox_to_anchor=(6.265, .6), frameon=False
-  )
-
-# Update the plot after adding the first legend
-plt.draw()
-
-# Add legend for column colors (gene_group)
-col_handles = [mpatches.Patch(color=color, label=gene_group) for gene_group, color in gene_group_color_map.items()]
-col_legend = g.ax_col_dendrogram.legend(
-  handles=col_handles, title="Gene Group", loc="right",
-  bbox_to_anchor=(1.4, -.7), frameon=False
-  )
-
-# Show plot
-plt.show()
+plot_correlation_clustermap(spearman_results, sc_dat.obs)
 ```
+
+### Decidual endometrium
+
+```{python}
+# Groups are defined by gene_group, gene_id, and celltype.
+spearman_results = (
+  df_for_correlation
+  .query("cyclephase in ['MS', 'LS']") ## !!! the important cycle phase selectio
+  .groupby(["gene_group", "gene_id", "celltype", "lineage"], observed=True) 
+  .apply(pearson_correlation_test)
+  .reset_index()
+  .dropna()  # Remove rows where the test could not be performed (returned NaNs)
+  .sort_values(by=["gene_group", "p_value", "gene_id"], ascending=[True, True, False])
+  .assign(significant=lambda x: x["p_value"] < 0.05) # Add a significance flag
+)
+
+plot_correlation_clustermap(spearman_results, sc_dat.obs)
+```
+
+:::
 
 ## The expression of the genes throughout the cycle
 
@@ -585,32 +497,28 @@ Following this, well look at all the different cycle phases that are also repres
 * MS or Mid-Secretory as "rec"/"Receptive"
 * LS or Late-Secretory as "post"/"Post-receptive"
 
+Here crosses show the cell types with significant differences between the cycle phases. The significance is determined by the Kruskal-Wallis test, and the p-value is adjusted for multiple testing using the Benjamini-Hochberg method.
+
 ```{python}
 def plot_gene_list(
-  sc_dat,
+  all_genes_df,  # Changed from sc_dat to all_genes_df
   gene_list,
   stat_table=None,
   wrap_rows=3
 ):
   cycle_order = ["EP", "LP", "ES", "MS", "LS"]
   
-  # Extract and prepare expression data
+  # Filter all_genes_df for the current gene_list
+  # and prepare expression data
   extracted_data = (
-    gene_x_sample_view(
-      sc_dat_obj=sc_dat,
-      gene_list=gene_list,
-      cols_of_interest={"index", "lineage", "celltype", "cyclephase"}
-    )
+    all_genes_df[all_genes_df['gene_id'].isin(gene_list)]
     .query("cyclephase in @cycle_order")
     .assign(cyclephase=lambda df: pd.Categorical(df["cyclephase"], categories=cycle_order, ordered=True))
   )
-  
-  # Get significant genes set
-  significant_genes = set() if stat_table is None else set(
-    stat_table.query("gene_id in @gene_list & significant == True")["gene_id"]
-  )
 
-  # Group data and calculate mean expression
+  # Group data and calculate mean expression.
+  # 'norm_expr' in all_genes_df is already (single_cell_expr / N_cells_in_group) * 1e6.
+  # Taking the mean here averages these pre-scaled values.
   grouped_data = (
     extracted_data
     .groupby(["gene_id", "celltype", "cyclephase", "lineage"], observed=True)
@@ -621,15 +529,17 @@ def plot_gene_list(
     )
   )
   
-  # Join with stat_table if provided
+  # Join with stat_table if provided to get significance information
   if stat_table is not None:
     grouped_data = grouped_data.merge(
       stat_table[["gene_id", "celltype", "significant"]].drop_duplicates(),
       on=["gene_id", "celltype"],
       how="left"
     )
+    # Fill missing 'significant' values (e.g. for gene/celltype pairs not in stat_table) as False
     grouped_data["significant"] = grouped_data["significant"].fillna(False)
   else:
+    # If no stat_table, assume nothing is significant for styling purposes
     grouped_data["significant"] = False
   
   # Create x-position offsets for dodging by lineage
@@ -649,7 +559,7 @@ def plot_gene_list(
     col_wrap=wrap_rows,
     height=3, aspect=1.2,
     sharex=True,
-    sharey=False
+    sharey=False  # y-scales might differ due to normalization in all_gene_df
   )
 
   # Add scatter plots with dodged positions
@@ -658,7 +568,7 @@ def plot_gene_list(
     x="x_dodged",
     y="norm_expr_mean",
     hue="lineage",
-    style="significant",
+    style="significant", # Uses the 'significant' column from stat_table merge
     alpha=0.5,
     s=50
   )
@@ -669,15 +579,12 @@ def plot_gene_list(
     ax.set_xticks(range(len(cycle_order)))
     ax.set_xticklabels(cycle_order)
   
-  g.set_axis_labels("Cycle Phase", "Mean Normalized Expression")
+  # Updated y-axis label to reflect the nature of 'norm_expr' from all_gene_df
+  g.set_axis_labels("Cycle Phase", "Mean Scaled Expression") 
   g.add_legend(bbox_to_anchor=(1.08, 0.5), loc="center")
   plt.tight_layout()
 
   return g
-
-
-# kruskal_results
-plot_gene_list(sc_dat, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_rows=2)
 
 ```
 
@@ -688,7 +595,13 @@ plot_gene_list(sc_dat, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_ro
 First lets look at the expression changes of **implantation or implantation failure DE genes** throughout the menstrual cycle for every major cell typ.
 
 ```{python}
-plot_gene_list(sc_dat, clin_de_genes, stat_table=kruskal_results, wrap_rows=2)
+df_group = gene_x_sample_view(
+  sc_dat_obj=sc_dat,
+  gene_list=clin_de_genes,
+  cols_of_interest={"index", "lineage", "celltype", "cyclephase"}
+)
+df_group = normalize_expr_by_cell_count(df_group)
+plot_gene_list(df_group, clin_de_genes, stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### ESCRT-0
@@ -696,7 +609,7 @@ plot_gene_list(sc_dat, clin_de_genes, stat_table=kruskal_results, wrap_rows=2)
 Then, we have ESCRT-0 complex markers to investigate: HGS, STAM, STAM2
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_rows=2)
+plot_gene_list(all_gene_df, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### ESCRT-I
@@ -704,7 +617,7 @@ plot_gene_list(sc_dat, all_genes["ESCRT-0"], stat_table=kruskal_results, wrap_ro
 ESCRT-I complex markers: MVB12A,MVB12B,TSG101,UBAP1,VPS28,VPS37A,VPS37B,VPS37C,VPS37D
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-I"], stat_table=kruskal_results, wrap_rows=3)
+plot_gene_list(all_gene_df, all_genes["ESCRT-I"], stat_table=kruskal_results, wrap_rows=3)
 ```
 
 ### ESCRT-II
@@ -712,7 +625,7 @@ plot_gene_list(sc_dat, all_genes["ESCRT-I"], stat_table=kruskal_results, wrap_ro
 ESCRT-II complex markers: SNF8, VPS25, VPS36
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-II"], wrap_rows=2)
+plot_gene_list(all_gene_df, all_genes["ESCRT-II"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### ESCRT-III
@@ -720,7 +633,7 @@ plot_gene_list(sc_dat, all_genes["ESCRT-II"], wrap_rows=2)
 ESCRT-III complex markers: CHMP2A, CHMP2B, CHMP3, CHMP4A, CHMP4B, CHMP4C, CHMP6
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-III"], wrap_rows=3)
+plot_gene_list(all_gene_df, all_genes["ESCRT-III"], stat_table=kruskal_results, wrap_rows=3)
 ```
 
 ### ESCRT-IV
@@ -728,7 +641,7 @@ plot_gene_list(sc_dat, all_genes["ESCRT-III"], wrap_rows=3)
 ESCRT-III complex markers: VPS4A,VPS4B,VTA1
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-IV"], wrap_rows=2)
+plot_gene_list(all_gene_df, all_genes["ESCRT-IV"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### ESCRT-independent
@@ -736,7 +649,7 @@ plot_gene_list(sc_dat, all_genes["ESCRT-IV"], wrap_rows=2)
 ESCRT-independent EV-associated markers: RAB31, SMPD3 (nSMASE2)
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["ESCRT-independent"], wrap_rows=2)
+plot_gene_list(all_gene_df, all_genes["ESCRT-independent"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### EV release gene markers
@@ -746,12 +659,12 @@ Variations of RAB27, RAB11, RAB3, RAB7, split into two groups for better visuali
 ```{python}
 # sc_dat.var.index[sc_dat.var.index.str.contains("RAB")]
 gene_selection=all_genes["EV release gene markers"][:4]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=2)
+plot_gene_list(all_gene_df, gene_selection, stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ```{python}
 gene_selection=all_genes["EV release gene markers"][4:]
-plot_gene_list(sc_dat, gene_selection, wrap_rows=3)
+plot_gene_list(all_gene_df, gene_selection, stat_table=kruskal_results, wrap_rows=3)
 ```
 
 ### Tetraspanins
@@ -759,7 +672,7 @@ plot_gene_list(sc_dat, gene_selection, wrap_rows=3)
 Tetraspanins and other cargo markers: CD9, CD63, CD81, ALIX, SDCBP
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["tetraspanins"], wrap_rows=2)
+plot_gene_list(all_gene_df, all_genes["tetraspanins"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### Accessory
@@ -767,7 +680,7 @@ plot_gene_list(sc_dat, all_genes["tetraspanins"], wrap_rows=2)
 Accessory markers PDCD6IP, SDCBP (syntenin-1), SDC (syndecan)
 
 ```{python}
-plot_gene_list(sc_dat, all_genes["accessory"], wrap_rows=2)
+plot_gene_list(all_gene_df, all_genes["accessory"], stat_table=kruskal_results, wrap_rows=2)
 ```
 
 ### All the genes combined
@@ -775,7 +688,7 @@ plot_gene_list(sc_dat, all_genes["accessory"], wrap_rows=2)
 Finally, we can look at all the genes combined. This is a bit of a mess, but it shows the expression of all the genes throughout the cycle.
 
 ```{python}
-
+plot_gene_list(all_gene_df, [gene for sublist in all_genes.values() for gene in sublist], stat_table=kruskal_results, wrap_rows=4)
 ```
 
 :::
