@@ -53,7 +53,6 @@ from sklearn.preprocessing import normalize
 try: from analysis.helpers.deconvo_functions import *
 except ImportError: from helpers.deconvo_functions import *
 
-## import the functions used in this report (got too long to include them in the report)
 try: from analysis.helpers.projection_functions import *
 except ImportError: from helpers.projection_functions import *
 
@@ -403,6 +402,54 @@ peruvian_bio_ev = peruvian_grouped(
 peruvian_bio_ev.show()
 ```
 
+### Proportions Plot with added scRNA-seq cell type ratios {.unnumbered .unlisted}
+
+```{python}
+# Define the mapping for cycle phases
+phase_mapping = {
+  "EP": "pro", "LP": "pro", "ES": "pre", "MS": "rec", "LS": "post"
+}
+
+# Calculate scRNA-seq percentages and prepare for concatenation
+sc_ratios_prep = (
+  sc_dat.obs
+  .query("cyclephase != 'Menstrual'") # Remove "Menstrual" phase samples
+  .assign(cyclephase_mapped=lambda df: df["cyclephase"].map(phase_mapping)) # Map to new phases
+  .groupby(["cyclephase_mapped", "celltype"])
+  .size()
+  .pipe(lambda s: (s / s.groupby(level="cyclephase_mapped").sum())) # Calculate percentages
+  .reset_index(name="fractions")
+  .assign(group="scRNA-seq")
+  .rename(columns={"celltype": "variable", "cyclephase_mapped": "cyclephase"}) # Rename mapped phase to 'cyclephase'
+  .merge(
+    general_cells.reset_index().assign(variable = lambda x: x.celltype), # Adds 'lineage'
+    on="variable",
+    how="left"
+  )
+)
+
+# Concatenate with the existing fractions_long and set cyclephase to categorical
+fractions_long = (
+  pd.concat([fractions_long, sc_ratios_prep], ignore_index=True)
+  .assign(
+    cyclephase=lambda df: pd.Categorical(
+      df["cyclephase"],
+      categories=["pro", "pre", "rec", "post"], # Ensure correct order
+      ordered=True
+    )
+  )
+)
+
+peruvian_bio_ev = peruvian_grouped(
+  fractions_df=fractions_long,
+  grouping_id="group",
+  global_color_scale=global_color_scale,
+  dims=(200, 150)
+)
+
+peruvian_bio_ev.show()
+```
+
 ### Biplot of the Fractions {.unnumbered .unlisted}
 
 ```{python}
@@ -411,7 +458,7 @@ biplot, pca = biplot_fractions(
   ccht_uf_pheno,
   color_field="cyclephase",
   style_field="group",
-  text_limit = 0.04, # controls on how much labels are shown
+  text_limit = 0.02, # controls on how much labels are shown
   dims = (400, 400)
   )
 biplot.show()
@@ -459,7 +506,7 @@ loadings_plt = alt.Chart(loadings_combined).mark_line(
 ).properties(
   title='Loadings for Principal Component',
   width=400,
-  height=150
+  height=200
 )
 
 loadings_plt.show()
@@ -554,7 +601,7 @@ stat_tmp_groups = pd.DataFrame({
 
 # set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None),
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-45, ticks=True, title=None),
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=True, title=None)
 )
 
@@ -584,18 +631,9 @@ text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encod
 text_overlay_diff = base_text.mark_text(fontSize=10, align="center", dy=12).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
 
-# This layer creates custom text labels.
-custom_annotation_layer = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="center").encode(
-  y=alt.Y("celltype:N", sort=stat_comb_celltypes),
-  x=alt.X("loc:Q").axis(labels=False, ticks=False, title="Biopsy"),
-  yOffset=alt.value(heatmap_target_cell_height + 10), # Adjust as needed to position above x-axis title/labels
-  text=alt.Text("base")
-)
-
 comp_stats_bio_plt = (
   yaxis_color_strip + grey_background + heatmap +
-  text_overlay_stars + text_overlay_diff + text_overlay_pval +
-  custom_annotation_layer
+  text_overlay_stars + text_overlay_diff + text_overlay_pval
 ).properties(width=plt_height, height=calculated_heatmap_height) # Use calculated height
 
 comp_stats_bio_plt.show()
@@ -616,7 +654,7 @@ stat_tmp_groups = pd.DataFrame({
 
 # set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None, titleY=25),
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-45, ticks=True, title=None, titleY=25),
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=False, ticks=False, title=None)
 )
 
@@ -647,18 +685,9 @@ text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encod
 text_overlay_diff = base_text.mark_text(fontSize=10, align="center", dy=12).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
 
-# This layer creates custom text labels for the x-axis.
-custom_annotation_layer = alt.Chart(stat_tmp_groups).mark_text(clip=False, align="center").encode(
-  y=alt.Y("celltype:N", sort=stat_comb_celltypes),
-  x=alt.X("loc:Q").axis(labels=False, ticks=False, title="UF"),
-  yOffset=alt.value(heatmap_target_cell_height + 10),
-  text=alt.Text("base")
-)
-
 comp_stats_uf_plt = (
   yaxis_color_strip + grey_background + heatmap +
-  text_overlay_stars + text_overlay_diff + text_overlay_pval +
-  custom_annotation_layer
+  text_overlay_stars + text_overlay_diff + text_overlay_pval
 ).properties(width=plt_height, height=calculated_heatmap_height) # Use calculated height
 
 comp_stats_uf_plt.show()
@@ -697,100 +726,40 @@ Here we focus on the comparison of the paired sample profiles from **both** biop
 ### Dendro-barplot of Fractions {.unnumbered .unlisted}
 
 ```{python}
-# the dendrogram part
-linkage_mat = linkage(frac_pred, method="complete", optimal_ordering=True)
-dend_obj = dendrogram(linkage_mat, labels=ccht_uf_pheno.index, no_plot=True)
-dendro_marks = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
-dendro_coord = get_df_coord(dend_obj)
 
-# and transform the x and y coords to a suitable scale
-scaler = .25
-cols_xk = ["xk1", "xk2", "xk3", "xk4"]
-cols_yk = ["yk1", "yk2", "yk3", "yk4"]
-x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
-dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
-dendro_coord[cols_xk] *= (dendro_marks.shape[0] - 1)
-dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
-dendro_coord[cols_yk] += 1.18 # and shift up whole unit
+# Get unique cycle phases
+unique_cycle_phases = ccht_uf_pheno['cyclephase'].unique()
 
-base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
-# the U shape is composed of a shoulder plus two arms, made with separate lines...
-shoulder = base.mark_rule().encode(
-    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
-    x2=alt.X2("xk3:Q"),
-    y=alt.Y("yk2:Q", title="").axis(None))
-arm1 = base.mark_rule().encode(
-    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
-    y=alt.Y("yk1:Q").axis(None),
-    y2=alt.Y2("yk2:Q"))
-arm2 = base.mark_rule().encode(
-    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
-    y=alt.Y("yk3:Q").axis(None),
-    y2=alt.Y2("yk4:Q"))
+# Initialize a list to store the plots
+phase_plots = []
 
-# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
-chart_den = shoulder + arm1 + arm2
-```
-
-```{python}
-# the barplot part
-# make fracs long again - reuse previous peruvian_transform
-fractions_long = (
-  peruvian_transform(
-    fractions=frac_pred,
-    phenotype=ccht_uf_pheno,
-    general_cells=general_cells
+# Loop through each cycle phase and generate a plot
+for phase in unique_cycle_phases:
+  # Filter phenotype data for the current phase
+  pheno_subset = ccht_uf_pheno[ccht_uf_pheno['cyclephase'] == phase]
+  # Filter fraction data for the samples in the current phase
+  frac_subset = frac_pred.loc[pheno_subset.index]
+  
+  # Create the dendro-barplot for the current phase
+  dendro_barplot_phase = create_dendro_barplot(
+    fractions_df=frac_subset, 
+    phenotype_df=pheno_subset, 
+    general_cells_df=general_cells,
+    plot_title=f"Phase: {phase}", # Shorter title for combined plot
+    plot_width=max(150, len(frac_subset.index) * 20), # Adjust width dynamically
+    plot_height=200 # Consistent height for side-by-side
   )
-  .rename(columns={"level_0": "samplename"})
-  .set_index("samplename")
-  .join(dendro_marks.set_index("labels"))
-  .join(ccht_uf_pheno)
-  .reset_index()
-  .sort_values("i")
-)
+  phase_plots.append(dendro_barplot_phase)
 
-custom_labels = fractions_long.samplename.drop_duplicates().values.tolist()
-# custom printer - by default the list is printed with newlines so that the js parses the list transposed
-custom_labels_str =  ', '.join(f"'{label}'" for label in custom_labels)
-
-base_bar = alt.Chart(fractions_long, view=alt.ViewConfig(strokeWidth=0))
-barplot = base_bar.mark_bar(
-  width=12
-).encode(
-  x=alt.X("i:Q").axis(
-    title=None, grid=False, domain=False,
-    tickCount=len(custom_labels),
-    labelAngle=90,
-    labelOverlap=False, 
-    labelExpr=f"[{custom_labels_str}][datum.value]" # custom label values mapped
-  ).scale(domain=[0,len(custom_labels)-1], padding=10),
-  y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0,1]),
-  color=alt.Color("lineage:N").scale(scheme="category10").legend(columns=1)
+# Combine the plots horizontally if there are any plots
+if phase_plots:
+  combined_plot = alt.hconcat(*phase_plots).resolve_scale(
+    color='shared' # Resolve color scales if they differ
   )
+  combined_plot.show()
+else:
+  print("No plots to display.")
 
-# add the color groupings 
-x_cycle_colors = barplot.mark_rect(clip=False, width=20).encode(
-    y=alt.value(0), # for some reason this works
-    y2=alt.value(-4),
-    yOffset=alt.value(-12),
-    color=alt.Color("cyclephase:N").scale(scheme="set1")
-  )
-x_method_colors = barplot.mark_rect(clip=False, width=20).encode(
-    y=alt.value(0), # for some reason this works
-    y2=alt.value(-16),
-    yOffset=alt.value(-24),
-    color=alt.Color("group:N").scale(scheme="set2")
-  )
-```
-
-```{python}
-dendro_barplot = (
-  (chart_den + barplot + x_cycle_colors + x_method_colors)
-  .resolve_scale(x="shared", y="shared", color="independent")
-  .resolve_axis(y="independent")
-  .properties(width=700, height=150)
-)
-dendro_barplot.show()
 ```
 
 ### Correlation Heatmap of the Paired Samples {.unnumbered .unlisted}
@@ -899,7 +868,7 @@ volcano.interactive()
 :::
 
 ```{python}
-(dendro_barplot & (final_chart | volcano)).resolve_scale(color="independent")
+(combined_plot & (final_chart | volcano)).resolve_scale(color="independent")
 ```
 
 ## FIG 4: Comparison of Vigano et al. and our sampling methods

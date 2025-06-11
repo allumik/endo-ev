@@ -478,3 +478,104 @@ def spacer_with_text(text="[insert plot here]", width=200, height=100, text_size
     width=width,
     height=height
   )
+
+
+def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_width=700, plot_height=150, bar_width=12, plot_title=""):
+  """
+  Generates a dendro-barplot visualization using Altair.
+
+  Args:
+    fractions_df: DataFrame with fraction data, samples as index, celltypes as columns.
+    phenotype_df: DataFrame with phenotype data, including 'samplename', 'cyclephase', 'group'.
+    general_cells_df: DataFrame mapping celltypes to lineages.
+    plot_width: Width of the combined plot.
+    plot_height: Height of the combined plot.
+    bar_width: Width of the bars in the barplot.
+    plot_title: Title for the plot.
+
+  Returns:
+    An Altair chart object.
+  """
+  # Dendrogram part
+  linkage_mat = linkage(fractions_df, method="complete", optimal_ordering=True)
+  # Ensure labels in dendrogram match the index of phenotype_df for joining later
+  dend_obj = dendrogram(linkage_mat, labels=phenotype_df.loc[fractions_df.index].index.tolist(), no_plot=True)
+  dendro_marks = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
+  dendro_coord = get_df_coord(dend_obj)
+
+  # Transform x and y coords for dendrogram
+  scaler = 0.25
+  cols_xk = ["xk1", "xk2", "xk3", "xk4"]
+  cols_yk = ["yk1", "yk2", "yk3", "yk4"]
+  x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
+  dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
+  dendro_coord[cols_xk] *= (dendro_marks.shape[0] - 1)
+  dendro_coord[cols_yk] *= scaler / dendro_coord[cols_yk].max(axis=None)
+  dendro_coord[cols_yk] += 1.18
+
+  base_dendro = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
+  shoulder = base_dendro.mark_rule().encode(
+    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0, len(dend_obj["ivl"]) - 1]),
+    x2=alt.X2("xk3:Q"),
+    y=alt.Y("yk2:Q", title="").axis(None)
+  )
+  arm1 = base_dendro.mark_rule().encode(
+    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0, len(dend_obj["ivl"]) - 1]),
+    y=alt.Y("yk1:Q").axis(None),
+    y2=alt.Y2("yk2:Q")
+  )
+  arm2 = base_dendro.mark_rule().encode(
+    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0, len(dend_obj["ivl"]) - 1]),
+    y=alt.Y("yk3:Q").axis(None),
+    y2=alt.Y2("yk4:Q")
+  )
+  chart_den = shoulder + arm1 + arm2
+
+  # Barplot part
+  fractions_long_transformed = (
+    peruvian_transform(
+      fractions=fractions_df,
+      phenotype=phenotype_df, # Use the passed phenotype_df
+      general_cells=general_cells_df # Use the passed general_cells_df
+    )
+    .rename(columns={"level_0": "samplename"})
+    .set_index("samplename")
+    .join(dendro_marks.set_index("labels")) # Join on 'labels' from dendro_marks
+    .join(phenotype_df) # Join with the original phenotype_df to get 'group' and 'cyclephase'
+    .reset_index()
+    .sort_values("i")
+  )
+
+  custom_labels = fractions_long_transformed["samplename"].drop_duplicates().values.tolist()
+  custom_labels_str = ', '.join(f"'{label}'" for label in custom_labels)
+
+  base_bar = alt.Chart(fractions_long_transformed, view=alt.ViewConfig(strokeWidth=0))
+  barplot = base_bar.mark_bar(
+    width=bar_width
+  ).encode(
+    x=alt.X("i:Q").axis(
+      title=None, grid=False, domain=False,
+      tickCount=len(custom_labels),
+      labelAngle=90,
+      labelOverlap=False,
+      labelExpr=f"[{custom_labels_str}][datum.value]"
+    ).scale(domain=[0, len(custom_labels) - 1], padding=10),
+    y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0, 1]),
+    color=alt.Color("lineage:N").scale(scheme="category10").legend(columns=1)
+  )
+
+  x_method_colors = barplot.mark_rect(clip=False, width=bar_width + 9).encode( # make rect wider than bar
+    y=alt.value(0),
+    y2=alt.value(-16),
+    yOffset=alt.value(-24),
+    color=alt.Color("group:N").scale(scheme="set2")
+  )
+
+  # Combine charts
+  dendro_barplot_chart = (
+    (chart_den + barplot + x_method_colors)
+    .resolve_scale(x="shared", y="shared", color="independent")
+    .resolve_axis(y="independent")
+    .properties(width=plot_width, height=plot_height, title=plot_title)
+  )
+  return dendro_barplot_chart

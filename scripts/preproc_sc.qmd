@@ -58,14 +58,9 @@ replace_dict = {
   "Proliferative Disordered": "EP"
 }
 
-replace_immu = {
-  "Lymphatic": ["uNK1", "uNK1_cycling", "uNK2", "uNK3", "ILC3", "Peripheral_lymphocyte", "Lymphatic", "Immune_Lymphoid"],
-  "Myeloid": ["eM1", "eM2", "cDC1", "cDC2", "pDC", "Monocyte", "Immune_Myeloid"],
-  "B-cells": ["B_cell", "Plasma_B_cell"],
-  "T-cells": ["T_Reg", "T_cell_CD8", "T_cell_CD4", "T_cell_cycling"],
-  "Glandular_secretory": ["Glandular_secretory_FGF7"] # also replace the FGF7 cells
-}
-inv_replace_immu = {value: key for key, values in replace_immu.items() for value in values}
+# replace the FGF7 cells
+replace_ct = { "Glandular_secretory": ["Glandular_secretory_FGF7"] }
+inv_replace_ct = {value: key for key, values in replace_ct.items() for value in values}
 cyclephase_to_include = ["LS", "LP", "EP", "ES", "MS", "Menstrual"]
 ```
 
@@ -80,47 +75,28 @@ if not snapshot_an_loc.exists():
     backed = "r"
   )
 
-  sc_dat_immu = sc.read_h5ad(
-    Path(raw_data_folder).expanduser() / "endometriumAtlasV2_cells_immune.h5ad",
-    backed = "r"
-  )
-
   sc_dat.obs = (
     sc_dat.obs
-    .assign(
-      cyclephase=lambda x: x.Stage.replace(replace_dict).astype("category"),
-      celltype=lambda x: 
-        x.celltype
-        .astype("object")
-        .mask(
-          x.index.isin(sc_dat_immu.obs.celltype.index), 
-          sc_dat_immu.obs.celltype.astype("object")
-        ),
-      label_long=lambda x:
-        x.label_long
-        .astype("object")
-        .mask(
-          x.index.isin(sc_dat_immu.obs.label_long.index), 
-          sc_dat_immu.obs.label_long.astype("object")
-        )
-        .astype("category")
-    )
+    .assign(cyclephase=lambda x: x.Stage.replace(replace_dict).astype("category"))
     .rename(columns={"sample": "samplename"})
     # now generalise the cell types for better deconvolution classes
-    .assign(celltype=lambda x: x.celltype.replace(inv_replace_immu).astype("category"))
+    .assign(celltype=lambda x: x.celltype.replace(inv_replace_ct).astype("category"))
   )
 
-  del sc_dat_immu
+  sc_dat.obs[["lineage", "celltype"]].value_counts()
 
-  ## also exclude the endometriosis samples
+  ## exclude the endometriosis samples
   the_condition = "(celltype not in @sc_dat.var.index) & (Endometrial_pathology == 'C') & (cyclephase in @cyclephase_to_include)"
   sc_dat = sc_dat[sc_dat.obs.query(the_condition).index, :].to_memory()
 
   ## exclude some celltypes, such as she hormones cell types and poorly represented samples
+  ## EDIT: this is not needed anymore, as we have already filtered out the celltypes and there
+  ## are no poorly represented samples (e.g. < 100 cells)
   count_tmp = sc_dat.obs.celltype.value_counts()
   no_go_celltype = list(count_tmp[count_tmp < 100].index) + ['eHormones', 'sHormones', 'dHormones']
   sc_dat = sc_dat[sc_dat.obs.query("celltype not in @no_go_celltype").index, :]
 
+  ## preprocess the data
   sc_dat = ov.pp.preprocess(sc_dat.to_memory(), mode="pearson|pearson", n_HVGs=3000)
 
   ## switch the expression matrix to raw counts if the matrix is preprocessed
