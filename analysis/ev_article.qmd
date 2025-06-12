@@ -440,14 +440,14 @@ fractions_long = (
   )
 )
 
-peruvian_bio_ev = peruvian_grouped(
+peruvian_all = peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group",
   global_color_scale=global_color_scale,
   dims=(200, 150)
 )
 
-peruvian_bio_ev.show()
+peruvian_all.show()
 ```
 
 ### Biplot of the Fractions {.unnumbered .unlisted}
@@ -709,10 +709,10 @@ Combining them all into one.
 ```{python}
 # have to resolve the color scale, otherwise the loadings_plt will override the biplot's scale
 (
-  peruvian_bio_ev | 
-  (biplot & loadings_plt).resolve_scale(color="independent", shape="independent") | 
-  comp_stats_plt
+  (peruvian_all | comp_stats_plt) &
+  (biplot | loadings_plt).resolve_scale(color="independent", shape="independent")
 ).resolve_scale(color="independent", shape="independent").show()
+
 ```
 
 ## FIG 3: Comparison of Biopsy and EV Sampling Methods
