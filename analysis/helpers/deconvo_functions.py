@@ -480,7 +480,7 @@ def spacer_with_text(text="[insert plot here]", width=200, height=100, text_size
   )
 
 
-def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_width=700, plot_height=150, bar_width=12, plot_title=""):
+def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_width=700, plot_height=150, bar_width=12, plot_title="", show_legend=True):
   """
   Generates a dendro-barplot visualization using Altair.
 
@@ -492,6 +492,7 @@ def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_wid
     plot_height: Height of the combined plot.
     bar_width: Width of the bars in the barplot.
     plot_title: Title for the plot.
+    show_legend: Boolean, whether to display the legend.
 
   Returns:
     An Altair chart object.
@@ -560,15 +561,15 @@ def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_wid
       labelOverlap=False,
       labelExpr=f"[{custom_labels_str}][datum.value]"
     ).scale(domain=[0, len(custom_labels) - 1], padding=10),
-    y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0, 1]),
-    color=alt.Color("lineage:N").scale(scheme="category10").legend(columns=1)
+    y=alt.Y("fractions:Q").axis(grid=False, title=None).scale(domain=[0, 1]),
+    color=alt.Color("lineage:N", legend=alt.Legend(columns=1) if show_legend else None).scale(scheme="category10")
   )
 
   x_method_colors = barplot.mark_rect(clip=False, width=bar_width + 9).encode( # make rect wider than bar
     y=alt.value(0),
     y2=alt.value(-16),
     yOffset=alt.value(-24),
-    color=alt.Color("group:N").scale(scheme="set2")
+    color=alt.Color("group:N", legend=alt.Legend() if show_legend else None).scale(scheme="set2")
   )
 
   # Combine charts

@@ -140,6 +140,8 @@ general_cells = ( # associate celltypes with the lineage information in the sc_d
   .loc[:, ["lineage", "celltype"]]
   .drop_duplicates("celltype")
   .set_index("celltype", drop=True)
+  ## rename Mesenhymal to Stromal in the lineage column
+  .replace({"lineage": {"Mesenchymal": "Stromal"}})
   .reindex(frac_pred.columns.values)
 )
 
@@ -726,40 +728,41 @@ Here we focus on the comparison of the paired sample profiles from **both** biop
 ### Dendro-barplot of Fractions {.unnumbered .unlisted}
 
 ```{python}
-
 # Get unique cycle phases
 unique_cycle_phases = ccht_uf_pheno['cyclephase'].unique()
 
 # Initialize a list to store the plots
 phase_plots = []
+num_phases = len(unique_cycle_phases)
 
 # Loop through each cycle phase and generate a plot
-for phase in unique_cycle_phases:
+for i, phase in enumerate(unique_cycle_phases):
   # Filter phenotype data for the current phase
   pheno_subset = ccht_uf_pheno[ccht_uf_pheno['cyclephase'] == phase]
   # Filter fraction data for the samples in the current phase
   frac_subset = frac_pred.loc[pheno_subset.index]
-  
+
+  # Determine if legend should be shown
+  show_legend_for_plot = (i == num_phases - 1)
+
   # Create the dendro-barplot for the current phase
   dendro_barplot_phase = create_dendro_barplot(
-    fractions_df=frac_subset, 
-    phenotype_df=pheno_subset, 
+    fractions_df=frac_subset,
+    phenotype_df=pheno_subset,
     general_cells_df=general_cells,
-    plot_title=f"Phase: {phase}", # Shorter title for combined plot
-    plot_width=max(150, len(frac_subset.index) * 20), # Adjust width dynamically
-    plot_height=200 # Consistent height for side-by-side
+    plot_title=f"Phase: {phase}",
+    plot_width=max(150, len(frac_subset.index) * 20),
+    plot_height=200,
+    show_legend=show_legend_for_plot  # Pass the legend visibility argument
   )
+
   phase_plots.append(dendro_barplot_phase)
 
 # Combine the plots horizontally if there are any plots
-if phase_plots:
-  combined_plot = alt.hconcat(*phase_plots).resolve_scale(
-    color='shared' # Resolve color scales if they differ
-  )
-  combined_plot.show()
-else:
-  print("No plots to display.")
-
+combined_plot = alt.hconcat(*phase_plots).resolve_scale(
+  color='shared'
+)
+combined_plot.show()
 ```
 
 ### Correlation Heatmap of the Paired Samples {.unnumbered .unlisted}
@@ -813,13 +816,66 @@ y_group_colors = base_heatmap.mark_rect().encode(
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
-# Layer heatmap and colors
-final_chart = (x_group_colors + y_group_colors + base_heatmap).resolve_scale(
-  x='shared', y='shared', color='shared'
+# add horizontal and vertical lines to separate the groups
+x_lines = alt.Chart(
+  corr_mat.groupby('cyclephase_y').last().apply(lambda x: x.iloc[:-1]).reset_index(drop=True)
+).mark_rule(color='white', strokeWidth=2, xOffset=10).encode(
+  x=alt.X("x_vars:O", sort=corr_mat.x_vars.unique())
 )
+y_lines = alt.Chart(
+  corr_mat.groupby('cyclephase').last().apply(lambda x: x.iloc[:-1]).reset_index(drop=True)
+).mark_rule(color='white', strokeWidth=2, yOffset=10).encode(
+  y=alt.Y("y_vars:O", sort=corr_mat.y_vars.unique())
+)
+
+
+# Layer heatmap and colors
+final_chart = (
+  x_group_colors + y_group_colors + base_heatmap + x_lines + y_lines
+  ).resolve_scale(x='shared', y='shared', color='shared')
 
 # Display the chart
 final_chart
+```
+
+In addition to the heatmap, we can calculate the average correlation between the biopsy and UF samples for each cycle phase combination. This could be later on added on top of the heatmap or used to create a separate summary table.
+
+```{python}
+# Calculate the average correlation for each combination of
+# x_vars' cyclephase (biopsy samples) and y_vars' cyclephase (UF samples)
+avg_cyclephase_correlation_matrix = (
+  corr_mat.groupby(['cyclephase', 'cyclephase_y'])['correlation']
+  .mean()
+  .reset_index()
+  .rename(columns={'cyclephase': 'biopsy_cyclephase', 'cyclephase_y': 'uf_cyclephase', 'correlation': 'avg_correlation'})
+)
+
+# Create the heatmap
+# The sort=cycle_order argument ensures the phases are ordered as "pro", "pre", "rec", "post"
+heatmap_avg_corr = alt.Chart(avg_cyclephase_correlation_matrix).mark_rect().encode(
+    x=alt.X('biopsy_cyclephase:N', title='Biopsy Cycle Phase', sort=cycle_order),
+    y=alt.Y('uf_cyclephase:N', title='UF Cycle Phase', sort=cycle_order).axis(orient='right'),
+    color=alt.Color('avg_correlation:Q', scale=alt.Scale(scheme='viridis'), legend=alt.Legend(title="Avg. Correlation"))
+).properties(
+    title='Average Correlation between Biopsy and UF Samples by Cycle Phase',
+    width=200,
+    height=200
+)
+
+# Create the text layer
+text_avg_corr = heatmap_avg_corr.mark_text(baseline='middle').encode(
+    text=alt.Text('avg_correlation:Q', format='.2f'),
+    color=alt.condition(
+        alt.datum.avg_correlation > 0.5,  # Adjust threshold for better contrast
+        alt.value('white'),
+        alt.value('black')
+    )
+)
+
+# Combine heatmap and text
+avg_corr_heatmap_plot = heatmap_avg_corr + text_avg_corr
+avg_corr_heatmap_plot.show()
+
 ```
 
 ### Volcano plot with the difference in deconvolution profiles {.unnumbered .unlisted}
@@ -998,97 +1054,35 @@ corr_long = (
 )
 ```
 
-Generate the X axis linkage plots.
-
 ```{python}
-# the dendrogram part for axis X
-linkage_mat = linkage(corr_mat.T, method="complete", optimal_ordering=True)
-dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.query("dataset == 'HUT'").index, no_plot=True)
-dendro_marks_x = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
-dendro_coord = get_df_coord(dend_obj)
-
-base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0)) 
-# the U shape is composed of a shoulder plus two arms, made with separate lines...
-shoulder = base.mark_rule().encode(
-    x=alt.X("xk2:Q", title="").axis(None),
-    x2=alt.X2("xk3:Q"),
-    y=alt.Y("yk2:Q", title="").axis(None))
-arm1 = base.mark_rule().encode(
-    x=alt.X("xk1:Q"),
-    y=alt.Y("yk1:Q"),
-    y2=alt.Y2("yk2:Q"))
-arm2 = base.mark_rule().encode(
-    x=alt.X("xk3:Q"),
-    y=alt.Y("yk3:Q"),
-    y2=alt.Y2("yk4:Q"))
-
-chart_den_x = (shoulder + arm1 + arm2).properties(height=50, width=200)
-```
-
-Generate the Y axis linkage plots.
-
-```{python}
-# the dendrogram part for axis Y
-linkage_mat = linkage(corr_mat, method="complete", optimal_ordering=True)
-dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.query("dataset == 'Vigano'").index, no_plot=True)
-dendro_marks_y = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
-dendro_coord = get_df_coord(dend_obj)
-
-base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
-# the U shape is composed of a shoulder plus two arms, made with separate lines...
-shoulder = base.mark_rule().encode(
-    y=alt.Y("xk2:Q", title="").axis(None),
-    y2=alt.Y2("xk3:Q"),
-    x=alt.X("yk2:Q", title="").axis(None).scale(reverse=True))
-arm1 = base.mark_rule().encode(
-    y=alt.Y("xk1:Q"),
-    x=alt.X("yk1:Q").scale(reverse=True),
-    x2=alt.X2("yk2:Q"))
-arm2 = base.mark_rule().encode(
-    y=alt.Y("xk3:Q"),
-    x=alt.X("yk3:Q").scale(reverse=True),
-    x2=alt.X2("yk4:Q"))
-
-chart_den_y = (shoulder + arm1 + arm2).properties(width=50, height=600)
-```
-
-```{python}
+# Order the x and y samplenames based on cyclephase as defined with cycle_order
+ordnung_x = corr_long[["x_vars", "cyclephase"]].sort_values("cyclephase", key=lambda x: pd.Categorical(x, categories=cycle_order, ordered=True)).x_vars.unique()
+ordnung_y = corr_long[["y_vars", "cyclephase_y"]].sort_values("cyclephase_y", key=lambda x: pd.Categorical(x, categories=cycle_order, ordered=True)).y_vars.unique()
 # Create Altair plot
 base_heatmap = alt.Chart(corr_long).mark_rect().encode(
-    x=alt.X('x_vars:O', sort=dendro_marks_x.labels, title=None).axis(offset=10),
-    y=alt.Y('y_vars:O', sort=dendro_marks_y.labels, title=None).axis(orient="right", offset=10),
+    x=alt.X('x_vars:O', sort=ordnung_x, title=None).axis(offset=10),
+    y=alt.Y('y_vars:O', sort=ordnung_y, title=None).axis(orient="right", offset=10),
     color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
   )
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
-  x=alt.X('x_vars:O', sort=dendro_marks_x.labels, title=None), # Nominal for categorical x-axis
+  x=alt.X('x_vars:O', sort=ordnung_x, title=None), # Nominal for categorical x-axis
   color=alt.Color("cyclephase:N"),
   xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 y_group_colors = base_heatmap.mark_rect().encode(
-  y=alt.Y('y_vars:O', sort=dendro_marks_y.labels, title=None), # Nominal for categorical x-axis
+  y=alt.Y('y_vars:O', sort=ordnung_y, title=None), # Nominal for categorical x-axis
   color=alt.Color("cyclephase_y:N").legend(None),
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 # Layer heatmap and colors
-final_chart = (x_group_colors + y_group_colors + base_heatmap).properties(width=150, height=600)
-
-# Display the chart
-final_chart
-```
-
-```{python}
-dendro_corrplot = (
-  (chart_den_y | chart_den_x & final_chart)
-  .resolve_scale(x="independent", y="independent")
-  .resolve_axis(x="independent", y="independent")
-)
-
+dendro_corrplot = (x_group_colors + y_group_colors + base_heatmap).properties(width=150, height=600)
 dendro_corrplot.show()
 ```
+
 
 ### PCA of UF Vigano and HUT samples
 
@@ -1260,9 +1254,8 @@ sq.pl.spatial_scatter(
 ### Example of the UMAP clustering of generated single cell data
 
 ```{python}
-# Plot with smaller size
-sc.pl.embedding(gen_ccht_ev, basis='X_umap', color='lineage', title="EV pSC UMAP", legend_loc="on data")
-sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='lineage', title="Biopsy pSC UMAP", legend_loc="on data")
+sc.pl.embedding(gen_ccht_ev, basis='X_umap', color='celltype', title="EV pSC UMAP", legend_loc="on data", legend_fontsize=7)
+sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='celltype', title="Biopsy pSC UMAP", legend_loc="on data", legend_fontsize=7)
 ```
 
 ### The boxplots of different comparison methods
