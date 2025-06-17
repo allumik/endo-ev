@@ -90,8 +90,8 @@ Load in the datasets:
 * the reference single cell dataset from the HECAv2 (`sc_dat`).
 * bulk transcriptomes from UF derived EV's of endometrium and biopsies (`ccht_uf_raw`).
 * phenotype table for the EV and biopsy samples (`ccht_uf_pheno`).
-* bulk transcriptomes from UF derived EV's of endometrium and Vigano et al. EV transcriptomes (`comb_uf_raw`).
-* phenotype table for the EV and Vigano et al. samples (`comb_uf_pheno`).
+* bulk transcriptomes from UF derived EV's of endometrium and Giacomini et al. (Vigano group) EV transcriptomes (`comb_uf_raw`).
+* phenotype table for the EV and Giacomini et al. samples (Vigano group) (`comb_uf_pheno`).
 
 ```{python}
 #| output: false
@@ -927,7 +927,7 @@ volcano.interactive()
 (combined_plot & (final_chart | volcano)).resolve_scale(color="independent")
 ```
 
-## FIG 4: Comparison of Vigano et al. and our sampling methods
+## FIG 4: Comparison of Giacomini et al. and our sampling methods
 
 ::: {.panel-tabset}
 
@@ -936,101 +936,42 @@ volcano.interactive()
 ### Dendro-barplot of Fractions {.unnumbered .unlisted}
 
 ```{python}
-# the dendrogram part
-linkage_mat = linkage(frac_comb.loc[comb_uf_pheno.index,], method="complete", optimal_ordering=True)
-dend_obj = dendrogram(linkage_mat, labels=comb_uf_pheno.index, no_plot=True)
-dendro_marks = pd.DataFrame({"labels": dend_obj["ivl"]}).reset_index().rename(columns={"index": "i"})
-dendro_coord = get_df_coord(dend_obj)
+# Get unique cycle phases from the phenotype data
+unique_cycle_phases = comb_uf_pheno['cyclephase'].unique()
 
-# and transform the x and y coords to a suitable scale
-scaler = .25
-cols_xk = ["xk1", "xk2", "xk3", "xk4"]
-cols_yk = ["yk1", "yk2", "yk3", "yk4"]
-x_min, x_max = (dendro_coord[cols_xk].min(axis=None), dendro_coord[cols_xk].max(axis=None))
-dendro_coord[cols_xk] = (dendro_coord[cols_xk] - x_min) / (x_max - x_min)
-dendro_coord[cols_xk] *= (dendro_marks.shape[0] - 1)
-dendro_coord[cols_yk] *= scaler/dendro_coord[cols_yk].max(axis=None) # scale the y heights
-dendro_coord[cols_yk] += 1.18 # and shift up whole unit
+# Initialize a list to store the plots for each cycle phase
+phase_plots = []
+num_phases = len(unique_cycle_phases)
 
-base = alt.Chart(dendro_coord, view=alt.ViewConfig(strokeWidth=0))
-# the U shape is composed of a shoulder plus two arms, made with separate lines...
-shoulder = base.mark_rule().encode(
-    x=alt.X("xk2:Q", title="").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
-    x2=alt.X2("xk3:Q"),
-    y=alt.Y("yk2:Q", title="").axis(None))
-arm1 = base.mark_rule().encode(
-    x=alt.X("xk1:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
-    y=alt.Y("yk1:Q").axis(None),
-    y2=alt.Y2("yk2:Q"))
-arm2 = base.mark_rule().encode(
-    x=alt.X("xk3:Q").axis(grid=False).scale(domain=[0,len(dend_obj["ivl"])-1]),
-    y=alt.Y("yk3:Q").axis(None),
-    y2=alt.Y2("yk4:Q"))
+# Loop through each unique cycle phase to create a separate plot
+for i, phase in enumerate(unique_cycle_phases):
+  # Filter phenotype data for the current phase
+  pheno_subset = comb_uf_pheno[comb_uf_pheno['cyclephase'] == phase]
+  # Filter fraction data for the samples in the current phase
+  frac_subset = frac_comb.loc[pheno_subset.index]
 
-# chart_den = (shoulder + arm1 + arm2).properties(width=.98*plt_width, height=50)
-chart_den = shoulder + arm1 + arm2
-```
+  # Determine if legend should be shown (e.g., only for the last plot)
+  show_legend_for_plot = (i == num_phases - 1)
 
-```{python}
-# the barplot part
-# make fracs long again - reuse previous peruvian_transform
-fractions_long = (
-  peruvian_transform(
-    fractions=frac_comb.loc[comb_uf_pheno.index],
-    phenotype=comb_uf_pheno,
-    general_cells=general_cells
+  # Call the create_dendro_barplot function for the current phase
+  dendro_bar_phase_chart = create_dendro_barplot(
+    fractions_df=frac_subset,
+    phenotype_df=pheno_subset.drop(columns=["group"]).rename(columns={"dataset": "group"}),
+    general_cells_df=general_cells,
+    plot_title=f"Combined UF Samples: {phase.upper()}", # Title indicating the phase
+    plot_width=max(250, len(frac_subset.index) * 20), # Adjust width based on number of samples
+    plot_height=150,
+    show_legend=show_legend_for_plot
   )
-  .rename(columns={"level_0": "samplename"})
-  .set_index("samplename")
-  .join(dendro_marks.set_index("labels"))
-  .join(comb_uf_pheno)
-  .reset_index()
-  .sort_values("i")
+  phase_plots.append(dendro_bar_phase_chart)
+
+dendro_bar = alt.hconcat(*phase_plots).resolve_scale(
+  color='shared' # Share color scale for cell types across plots
 )
 
-custom_labels = fractions_long.samplename.drop_duplicates().values.tolist()
-# custom printer - by default the list is printed with newlines so that the js parses the list transposed
-custom_labels_str =  ', '.join(f"'{label}'" for label in custom_labels)
-
-base_bar = alt.Chart(fractions_long, view=alt.ViewConfig(strokeWidth=0))
-barplot = base_bar.mark_bar(
-  width=8
-).encode(
-  x=alt.X("i:Q").axis(
-    title=None, grid=False, domain=False,
-    tickCount=len(custom_labels),
-    labelAngle=90,
-    labelOverlap=False, 
-    labelExpr=f"[{custom_labels_str}][datum.value]" # custom label values mapped
-  ).scale(domain=[0,len(custom_labels)-1], padding=10),
-  y=alt.Y("fractions:Q").axis(grid=False).scale(domain=[0,1]),
-  color=alt.Color("lineage:N").scale(scheme="category10").legend(columns=1)
-  )
-
-# add the color groupings 
-x_cycle_colors = barplot.mark_rect(clip=False, width=14).encode(
-    y=alt.value(0), # for some reason this works
-    y2=alt.value(-4),
-    yOffset=alt.value(-12),
-    color=alt.Color("cyclephase:N").scale(scheme="set1")
-  )
-x_method_colors = barplot.mark_rect(clip=False, width=14).encode(
-    y=alt.value(0), # for some reason this works
-    y2=alt.value(-16),
-    yOffset=alt.value(-24),
-    color=alt.Color("dataset:N").scale(scheme="set2")
-  )
-```
-
-```{python}
-dendro_bar = (
-  (chart_den + barplot + x_cycle_colors + x_method_colors)
-  .resolve_scale(x="shared", y="shared", color="independent")
-  .resolve_axis(y="independent")
-  .properties(width=500, height=150)
-)
 dendro_bar.show()
 ```
+
 
 
 ### Correlation Heatmap of UF samples {.unnumbered .unlisted}
@@ -1039,7 +980,7 @@ dendro_bar.show()
 # run a corr matrix with itself and select out the interesting rows
 corr_mat = (
   # transpose to run correlation against the samples, not celltypes
-  frac_comb.loc[comb_uf_pheno.index].T.corr(method="spearman")
+  frac_comb.loc[comb_uf_pheno.sort_values(["dataset", "cyclephase"], key=lambda x: pd.Categorical(x, categories=["pre", "rec"])).index].T.corr(method="spearman")
   # select out Vigano and CCHT in both axes
   .filter(regex="plus", axis=0).filter(regex="UF", axis=1)
 )
@@ -1048,41 +989,98 @@ corr_long = (
   corr_mat
   # stack it into long version for Altair
   .stack().rename("correlation").to_frame().reset_index(names=["y_vars", "x_vars"])
-  # now add a cols with the locations of last groups
-  .join(comb_uf_pheno[["cyclephase"]], on="x_vars")
-  .join(comb_uf_pheno[["cyclephase"]], on="y_vars", lsuffix="_y")
+  # Assign 'cyclephase_y' by mapping 'y_vars' to 'comb_uf_pheno.cyclephase'
+  # Assign 'cyclephase_x' by mapping 'x_vars' to 'comb_uf_pheno.cyclephase'
+  .assign(
+    cyclephase_y = lambda df: df['y_vars'].map(comb_uf_pheno['cyclephase'].astype(str)),
+    cyclephase_x = lambda df: df['x_vars'].map(comb_uf_pheno['cyclephase'].astype(str))
+  )
 )
 ```
 
 ```{python}
 # Order the x and y samplenames based on cyclephase as defined with cycle_order
-ordnung_x = corr_long[["x_vars", "cyclephase"]].sort_values("cyclephase", key=lambda x: pd.Categorical(x, categories=cycle_order, ordered=True)).x_vars.unique()
-ordnung_y = corr_long[["y_vars", "cyclephase_y"]].sort_values("cyclephase_y", key=lambda x: pd.Categorical(x, categories=cycle_order, ordered=True)).y_vars.unique()
+ordnung_x = corr_long[["x_vars", "cyclephase_x"]].drop_duplicates(ignore_index=False)
+ordnung_y = corr_long[["y_vars", "cyclephase_y"]].drop_duplicates(ignore_index=False)
 # Create Altair plot
 base_heatmap = alt.Chart(corr_long).mark_rect().encode(
-    x=alt.X('x_vars:O', sort=ordnung_x, title=None).axis(offset=10),
-    y=alt.Y('y_vars:O', sort=ordnung_y, title=None).axis(orient="right", offset=10),
-    color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
+  x=alt.X('x_vars:N', sort=ordnung_x, title=None).axis(offset=10),
+  y=alt.Y('y_vars:N', sort=ordnung_y, title=None).axis(orient="right", offset=10),
+  color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
   )
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
-  x=alt.X('x_vars:O', sort=ordnung_x, title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase:N"),
-  xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
-)
-
-y_group_colors = base_heatmap.mark_rect().encode(
-  y=alt.Y('y_vars:O', sort=ordnung_y, title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase_y:N").legend(None),
+  x=alt.X('x_vars:N', sort=ordnung_x, title=None), # Nominal for categorical x-axis
+  color=alt.Color("cyclephase_x:N"), # leave legend in the x-axis as the default
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
+y_group_colors = base_heatmap.mark_rect().encode(
+  y=alt.Y('y_vars:N', sort=ordnung_y, title=None), # Nominal for categorical x-axis
+  color=alt.Color("cyclephase_y:N").legend(None), # remove the legend from the y-axis to avoid duplication
+  xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
+)
+
+
+# add horizontal and vertical lines to separate the groups
+x_lines = alt.Chart(
+  corr_long.groupby('cyclephase_x').last().apply(lambda x: x.iloc[:-1]).reset_index(drop=True)
+).mark_rule(color='white', strokeWidth=2, xOffset=10).encode(
+  x=alt.X("x_vars:O", sort=ordnung_x, title=None)
+)
+y_lines = alt.Chart(
+  corr_long.groupby('cyclephase_y').last().apply(lambda x: x.iloc[:-1]).reset_index(drop=True)
+).mark_rule(color='white', strokeWidth=2, yOffset=10).encode(
+  y=alt.Y("y_vars:O", sort=ordnung_y, title=None)
+)
+
 # Layer heatmap and colors
-dendro_corrplot = (x_group_colors + y_group_colors + base_heatmap).properties(width=150, height=600)
+dendro_corrplot = (
+  y_group_colors + x_group_colors + base_heatmap + x_lines + y_lines
+  ).resolve_scale(x='shared', y='shared', color='independent').properties(width=150, height=450)
 dendro_corrplot.show()
 ```
 
+In addition to the base heatmap, we can calculate the average correlation between the Celvia and Vigano group samples for each cycle phase combination. This could be later on added on top of the heatmap or used to create a separate summary table.
+
+```{python}
+# Calculate the average correlation for each combination of
+# x_vars' cyclephase (biopsy samples) and y_vars' cyclephase (UF samples)
+avg_cyclephase_correlation_matrix = (
+  corr_long.groupby(['cyclephase_x', 'cyclephase_y'])['correlation']
+  .mean()
+  .reset_index()
+  .rename(columns={'cyclephase_x': 'celvia_cyclephase', 'cyclephase_y': 'vigano_cyclephase', 'correlation': 'avg_correlation'})
+)
+
+# Create the heatmap
+# The sort=cycle_order argument ensures the phases are ordered as "pro", "pre", "rec", "post"
+heatmap_avg_corr = alt.Chart(avg_cyclephase_correlation_matrix).mark_rect().encode(
+    x=alt.X('celvia_cyclephase:N', title='Celvia Cycle Phase', sort=cycle_order),
+    y=alt.Y('vigano_cyclephase:N', title='Vigano Cycle Phase', sort=cycle_order).axis(orient='right'),
+    color=alt.Color('avg_correlation:Q', scale=alt.Scale(scheme='viridis'), legend=alt.Legend(title="Avg. Correlation"))
+).properties(
+    title='Average Correlation between Celvia and Vigano Samples by Cycle Phase',
+    width=200,
+    height=200
+)
+
+# Create the text layer
+text_avg_corr = heatmap_avg_corr.mark_text(baseline='middle').encode(
+    text=alt.Text('avg_correlation:Q', format='.2f'),
+    color=alt.condition(
+        alt.datum.avg_correlation > 0.5,  # Adjust threshold for better contrast
+        alt.value('white'),
+        alt.value('black')
+    )
+)
+
+# Combine heatmap and text
+avg_corr_heatmap_plot = heatmap_avg_corr + text_avg_corr
+avg_corr_heatmap_plot.show()
+
+```
 
 ### PCA of UF Vigano and HUT samples
 
@@ -1195,7 +1193,7 @@ pca_four
 ```{python}
 pca_block = (pca_one & pca_two) | (pca_three & pca_four)
 (
-  (dendro_corrplot | pca_block & dendro_bar)
+  ((dendro_corrplot | pca_block) & dendro_bar)
   .resolve_scale(x="independent", y="independent", color="independent", shape="independent")
 )
 ```
