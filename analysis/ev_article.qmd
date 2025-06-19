@@ -446,7 +446,7 @@ peruvian_all = peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group",
   global_color_scale=global_color_scale,
-  dims=(200, 150)
+  dims=(150, 100)
 )
 
 peruvian_all.show()
@@ -461,7 +461,7 @@ biplot, pca = biplot_fractions(
   color_field="cyclephase",
   style_field="group",
   text_limit = 0.02, # controls on how much labels are shown
-  dims = (400, 400)
+  dims = (300, 250)
   )
 biplot.show()
 ```
@@ -1215,7 +1215,8 @@ crop_coords = get_spatial_crop_coords(adat)
 sq.pl.spatial_scatter(
   adat,
   color=[None], crop_coord=crop_coords,
-  ncols=2
+  ncols=2,
+  figsize=(6, 3),
   )
 ```
 
@@ -1231,21 +1232,24 @@ sq.pl.spatial_scatter(
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Reference"
+  size=1.3, title="Reference",
+  figsize=(6, 3),
 )
 sq.pl.spatial_scatter(
   adata_collection[(slide_ids[0], "ev")],
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="EV"
+  size=1.3, title="Projected EV",
+  figsize=(6, 3),
 )
 sq.pl.spatial_scatter(
   adata_collection[(slide_ids[0], "bio")],
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Biopsy"
+  size=1.3, title="Projected Biopsy",
+  figsize=(6, 3),
 )
 ```
 
