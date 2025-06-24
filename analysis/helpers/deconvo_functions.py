@@ -183,13 +183,13 @@ def dendro_barplot(
   plt.show()
 
 
-
 def biplot_fractions(
   fractions_df: pd.DataFrame,
   phenotype_df: pd.DataFrame,
   legend_title: str = "Cycle Phase",
   color_field: str = None, # Added for flexibility
   style_field: str = None, # Added for flexibility
+  color_scale: alt.Scale = None, # Added color scale parameter
   text_limit = 0.04, # controls on how much labels are shown
   dims = (400, 300)
 ) -> Tuple[alt.Chart, PCA]:
@@ -204,6 +204,7 @@ def biplot_fractions(
       legend_title: Title for the legend.
       color_field: Column in the merged DataFrame to use for color encoding.
       style_field: Column in the merged DataFrame to use for shape encoding.
+      color_scale: Altair Scale object for color encoding.
       text_limit: Controls on how many of loading titles are shown
       dims: The dimensions of the output plot, defaults to (400, 300)
 
@@ -232,7 +233,7 @@ def biplot_fractions(
   ).encode(
     x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
     y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-    color=alt.Color(f"{color_field}:N", title=legend_title) if color_field else "black",
+    color=alt.Color(f"{color_field}:N", title=legend_title, scale=color_scale) if color_field else "black",
     shape=alt.Shape(f"{style_field}:N") if style_field else "circle"
   )
 
@@ -265,7 +266,6 @@ def biplot_fractions(
     width=dims[0],  # Adjust as needed
     height=dims[1]   # Adjust as needed
   ), pca
-
 
 
 def peruvian_transform(
@@ -480,7 +480,7 @@ def spacer_with_text(text="[insert plot here]", width=200, height=100, text_size
   )
 
 
-def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_width=700, plot_height=150, bar_width=12, plot_title="", show_legend=True):
+def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_width=700, plot_height=150, bar_width=12, plot_title="", show_legend=True, group_color_scale=None, lineage_color_scale=None):
   """
   Generates a dendro-barplot visualization using Altair.
 
@@ -493,6 +493,8 @@ def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_wid
     bar_width: Width of the bars in the barplot.
     plot_title: Title for the plot.
     show_legend: Boolean, whether to display the legend.
+    group_color_scale: Altair Scale object for group colors. If None, defaults to "set2" scheme.
+    lineage_color_scale: Altair Scale object for lineage colors. If None, defaults to "category10" scheme.
 
   Returns:
     An Altair chart object.
@@ -551,6 +553,13 @@ def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_wid
   custom_labels_str = ', '.join(f"'{label}'" for label in custom_labels)
 
   base_bar = alt.Chart(fractions_long_transformed, view=alt.ViewConfig(strokeWidth=0))
+  
+  # Set default color scales if none provided
+  if group_color_scale is None:
+    group_color_scale = alt.Scale(scheme="set2")
+  if lineage_color_scale is None:
+    lineage_color_scale = alt.Scale(scheme="category10")
+  
   barplot = base_bar.mark_bar(
     width=bar_width
   ).encode(
@@ -562,14 +571,14 @@ def create_dendro_barplot(fractions_df, phenotype_df, general_cells_df, plot_wid
       labelExpr=f"[{custom_labels_str}][datum.value]"
     ).scale(domain=[0, len(custom_labels) - 1], padding=10),
     y=alt.Y("fractions:Q").axis(grid=False, title=None).scale(domain=[0, 1]),
-    color=alt.Color("lineage:N", legend=alt.Legend(columns=1) if show_legend else None).scale(scheme="category10")
+    color=alt.Color("lineage:N", legend=alt.Legend(columns=1) if show_legend else None, scale=lineage_color_scale)
   )
 
   x_method_colors = barplot.mark_rect(clip=False, width=bar_width + 9).encode( # make rect wider than bar
     y=alt.value(0),
     y2=alt.value(-16),
     yOffset=alt.value(-24),
-    color=alt.Color("group:N", legend=alt.Legend() if show_legend else None).scale(scheme="set2")
+    color=alt.Color("group:N", legend=alt.Legend() if show_legend else None, scale=group_color_scale)
   )
 
   # Combine charts

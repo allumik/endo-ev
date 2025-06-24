@@ -93,48 +93,71 @@ Load in the datasets:
 * bulk transcriptomes from UF derived EV's of endometrium and Giacomini et al. (Vigano group) EV transcriptomes (`comb_uf_raw`).
 * phenotype table for the EV and Giacomini et al. samples (Vigano group) (`comb_uf_pheno`).
 
+Here we rename some variables, for example the "biopsy" becomes the "Tissue" group, and the "UF" becomes the "UF-EV" group. We also load in the fractions predicted by the latest trained deconvolutional model.
+
 ```{python}
 #| output: false
-
-## load in the modified HECA atlas
+## Load the single cell reference data
 sc_dat = an.read_h5ad(snapshot_an_loc)
+```
 
-## load in the EV CCHT only data
+```{python}
+#| output: false
+## Create name remappers for the groups
+cyclephase_remap = { "pro": "PE", "pre": "ES", "rec": "MS", "post": "LS" }
+group_remap = { "UF": "UF-EV", "biopsy": "Tissue" }
+group2_remap = { "HUT": "UF-EV", "Vigano": "Giacomini EV" }
+
+## Load CCHT UF-EV and biopsy datasets (filtered)
 terminator = [] # some samples to exclude
 ccht_uf_raw = pd.read_feather(ccht_data_loc).set_index("gene_id").iloc[:-1]
 ccht_uf_tpm = pd.read_feather(ccht_tpm_loc).set_index("gene_id").iloc[:-1]
 ccht_uf_pheno = pd.read_table(ccht_pheno_loc).set_index("samplename").assign(
-    cyclephase=lambda x: 
-      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
-    )
+  group=lambda x: x.group.map(group_remap),
+  cyclephase=lambda x:
+    pd.Categorical(x.cyclephase.map(cyclephase_remap), categories=cyclephase_remap.values(), ordered=True)
+  )
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator and samplename in @ccht_uf_raw.columns")
+ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
+
+## Load CCHT UF-EV and biopsy datasets (unfiltered)
 ccht_uf_unfilt_raw = pd.read_feather(ccht_data_unfilt_loc).set_index("gene_id").iloc[:-1]
 ccht_uf_unfilt_tpm = pd.read_feather(ccht_tpm_unfilt_loc).set_index("gene_id").iloc[:-1]
 ccht_uf_pheno_unfilt = pd.read_table(ccht_pheno_unfilt_loc).set_index("samplename").assign(
-    cyclephase=lambda x: 
-      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
-    )
-ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
+  group=lambda x: x.group.map(group_remap),
+  cyclephase=lambda x:
+    pd.Categorical(x.cyclephase.map(cyclephase_remap), categories=cyclephase_remap.values(), ordered=True)
+  )
 
-## load in the EV combined dataset phenotype for the fractions
+## Load combined UF-EV datasets (CCHT + Giacomini et al.)
 comb_batch = pd.read_feather(comb_data_loc).set_index("gene_id").drop(columns=terminator)
 comb_raw = pd.read_feather(comb_raw_data_loc).set_index("external_gene_name").drop(columns=terminator)
 comb_all_pheno = (
   pd.read_table(comb_pheno_loc)
   .set_index("samplename")
   .query("samplename not in @terminator")
+  .assign(
+    dataset=lambda x: x.dataset.map(group2_remap),
+    group=lambda x: x.group.map(group_remap),
+    cyclephase=lambda x:
+      pd.Categorical(x.cyclephase.map(cyclephase_remap), categories=cyclephase_remap.values(), ordered=True)
+  )
 )
 comb_uf_pheno = (
   comb_all_pheno
-  .assign(dataset = lambda x: np.where(x.dataset == "HUT", x.dataset, "Vigano"))
-  .query("cyclephase in ['rec', 'pre'] and group == 'UF'")
+  .assign(dataset = lambda x: np.where(x.dataset == "UF-EV", x.dataset, "Giacomini EV"))
+  .query("cyclephase in ['MS', 'ES'] and group == 'UF-EV'")
 )
+```
 
-## load in the fractions predicted by the latest trained model
+```{python}
+#| output: false
+## Load deconvolution fraction predictions
 frac_pred = pd.read_table(fractions_file_loc, sep="\t", index_col=0)
 frac_comb = pd.read_table(fractions_file_loc_comb, sep="\t", index_col=0)
 frac_comb_raw = pd.read_table(fractions_file_loc_comb_raw, sep="\t", index_col=0)
 
+## Create cell type lineage mapping from single cell data
 general_cells = ( # associate celltypes with the lineage information in the sc_dat.obs
   sc_dat.obs
   .loc[:, ["lineage", "celltype"]]
@@ -144,16 +167,67 @@ general_cells = ( # associate celltypes with the lineage information in the sc_d
   .replace({"lineage": {"Mesenchymal": "Stromal"}})
   .reindex(frac_pred.columns.values)
 )
+```
 
-# Color scale for the celltypes - TODO: extende the color range to not repeat
-global_color_scale = alt.Scale(domain=general_cells.index.unique().tolist(), scheme="category20")
+Define the sample name converter function that will be used to convert the sample names in the loaded in dataframes. It will take the HUT\d+ prefix for the sample names and assign random numbers to the samples with the prefix format S\d+. The pairings will be conserved, with "UF-EV" and "Tissue" groups being paired together with the same S__ code, and both sampling methods having identifiers on them. 
+
+```{python}
+def convert_sample_names(sample_names):
+  """
+  Creates a mapping dictionary to convert sample names from 'HUT<number>_...'
+  to 'S<number>_...' format, ensuring paired samples get the same 'S' number.
+
+  Args:
+    sample_names: A list of sample name strings.
+
+  Returns:
+    A dictionary mapping old sample names to new sample names.
+  """
+  # Find all unique HUT prefixes (e.g., 'HUT10', 'HUT23') from the sample names
+  hut_prefixes = sorted(list(set(re.findall(r"(HUT\d+)", " ".join(sample_names)))))
+
+  # Create a mapping from HUT prefix to a new S-based prefix
+  s_map = {prefix: f"S{i+1:02d}" for i, prefix in enumerate(hut_prefixes)}
+
+  # Create the final rename dictionary for all sample names
+  rename_dict = {}
+  for name in sample_names:
+    match = re.match(r"(HUT\d+)", name)
+    if match:
+      hut_prefix = match.group(1)
+      if hut_prefix in s_map:
+        # Replace the HUT prefix with the corresponding S prefix and 'biopsy' with 'tissue'
+        new_name = name.replace(hut_prefix, s_map[hut_prefix], 1).replace("biopsy", "tissue")
+        rename_dict[name] = new_name
+  return rename_dict
+
+# apply the function on the sample dataframes
+resampler = convert_sample_names(ccht_uf_pheno_unfilt.index)
+ccht_uf_pheno = ccht_uf_pheno.rename(index=resampler)
+ccht_uf_pheno_unfilt = ccht_uf_pheno_unfilt.rename(index=resampler)
+ccht_uf_unfilt_raw = ccht_uf_unfilt_raw.rename(columns=resampler)
+ccht_uf_unfilt_tpm = ccht_uf_unfilt_tpm.rename(columns=resampler)
+ccht_uf_raw = ccht_uf_raw.rename(columns=resampler)
+ccht_uf_tpm = ccht_uf_tpm.rename(columns=resampler)
+comb_uf_pheno = comb_uf_pheno.rename(index=resampler)
+comb_batch = comb_batch.rename(columns=resampler)
+comb_raw = comb_raw.rename(columns=resampler)
+frac_pred = frac_pred.rename(index=resampler)
+frac_comb = frac_comb.rename(index=resampler)
+frac_comb_raw = frac_comb_raw.rename(index=resampler)
 ```
 
 We also load in the different statistical testing tables for CCHT dataset.
 
 ```{python}
-ccht_bio_stat = pd.read_excel(fractions_folder / "ccht_bio.xlsx", index_col=0)
-ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0)
+ccht_bio_stat = pd.read_excel(fractions_folder / "ccht_bio.xlsx", index_col=0).assign(
+  group1=lambda x: x.group1.map(cyclephase_remap),
+  group2=lambda x: x.group2.map(cyclephase_remap)
+)
+ccht_uf_stat = pd.read_excel(fractions_folder / "ccht_uf.xlsx", index_col=0).assign(
+  group1=lambda x: x.group1.map(cyclephase_remap),
+  group2=lambda x: x.group2.map(cyclephase_remap)
+)
 ccht_comp_stat = pd.read_excel(fractions_folder / "ccht_comp.xlsx", index_col=0)
 ```
 
@@ -167,6 +241,7 @@ features_ev = (
   .rename(columns={"Sample": "samplename"})
   # .query("samplename in @frac_pred.index") # don't filter out  here
   .set_index("samplename")
+  .rename(index=resampler)
 )
 ```
 
@@ -179,7 +254,37 @@ qualimap_ev = (
     )
   .rename(columns={"Sample": "samplename"})
   .set_index("samplename")
+  .rename(index=resampler)
 )
+```
+
+The color schemes that we are going to use
+
+```{python}
+phase_colors = {
+  "Proliferative": "#006d2c", "PE": "#006d2c", "EP": "#6ed5ff", "LP": "#006d2c",
+  "Pre-receptive": "#00BA38", "ES": "#00BA38", "Early-receptive": "#00BFC4",
+  "Receptive": "#619CFF", "MS": "#619CFF",
+  "Late-receptive": "#F58633", "Post-receptive": "#D11141", "LS": "#D11141",
+  "Menstrual": "#d11141",
+  "HRT+3": "#00BA38", "HRT+4": "#00BFC4", "HRT+5": "#619CFF", "HRT+6": "#F58633", "HRT+7": "#D11141",
+  "No result": "#A4A4A4", "Bad quality": "#A4A4A4", "Non-receptive": "#f03b20"
+}
+
+phases = list(phase_colors.keys())
+phcolors = list(phase_colors.values())
+# color scale for the cycle phases
+global_color_phase_all = alt.Scale(domain=phases, range=phcolors)
+phases_subset = ["PE", "ES", "MS", "LS"]
+phase_colors_subset = {k: phase_colors[k] for k in phases_subset if k in phase_colors}
+global_color_phase = alt.Scale(domain=phases_subset, range=list(phase_colors_subset.values()))
+# color scale for the lineages
+global_color_lineage = alt.Scale(domain=general_cells.lineage.unique().tolist(), scheme="category10")
+# color scale for the celltypes
+global_color_ct = alt.Scale(domain=general_cells.index.unique().tolist(), scheme="tableau20")
+# color scale for the groups
+global_color_group = alt.Scale(domain=["Tissue", "UF-EV"], scheme="dark2")
+global_color_group2 = alt.Scale(domain=["UF-EV", "Giacomini EV"], range=["#00BFC4", "#F58633"])
 ```
 
 
@@ -312,17 +417,16 @@ study_schema = spacer_with_text(height=400, width=580)
 ```{python}
 # barplot of the number of samples throughout the cycle phase
 barplot_ev_sum = alt.Chart(ccht_uf_pheno).mark_bar().encode(
-  x=alt.X("cyclephase:N").title(""),
+  x=alt.X("cyclephase:N", sort=phases).title(""),
   y=alt.Y("count(group):Q").title("Nr. of Samples"),
-  color=alt.Color("group:N").legend(orient="bottom", titleOrient="left")
+  color=alt.Color("group:N", scale=global_color_group).legend(orient="bottom", titleOrient="left")
 ).properties(width=150, height=225)
-
 
 # include single cell data overview as extra column
 barplot_sc_sum = alt.Chart(
-  sc_dat.obs[["cyclephase", "samplename", "dataset", "celltype"]].value_counts(["cyclephase", "dataset", "celltype"]).reset_index()
+  sc_dat.obs[["cyclephase", "samplename", "dataset"]].value_counts(["cyclephase", "dataset"]).reset_index()
 ).mark_bar().encode(
-  x=alt.X("cyclephase:N").title("").axis(labelAngle=-45),
+  x=alt.X("cyclephase:N", sort=phases).title("").axis(labelAngle=-45),
   y=alt.Y("count:Q").title("Nr. of Cells"),
   color=alt.Color("dataset:N").legend(orient="bottom", titleOrient="top", columns=2)
 ).properties(width=150, height=225)
@@ -352,13 +456,13 @@ df_melted = (
 )
 
 # Create a new column for the sample group
-df_melted['sample_group'] = df_melted['samplename'].apply(lambda x: 'biopsy' if 'biopsy' in x else 'UF')
+df_melted['sample_group'] = df_melted['samplename'].apply(lambda x: 'Tissue' if 'biopsy' in x else 'UF-EV')
 
 # Create the grouped boxplot
 featurecounts_chart = alt.Chart(df_melted).mark_boxplot(extent=1.5).encode(
   x=alt.X('biotype:N', title='Biotype', sort=top_biotypes).axis(labelAngle=-30),
   y=alt.Y('count:Q', title='Count (log)').scale(type="log", nice=True).axis(values=[1e3, 1e4, 1e5, 1e6, 1e7, 1e8]),
-  color=alt.Color('sample_group:N', title='Sample Group').legend(orient="top", titleOrient="left"),
+  color=alt.Color('sample_group:N', title='Sample Group', scale=global_color_group).legend(orient="top", titleOrient="left"),
   xOffset='sample_group:N',
   tooltip=['samplename', 'biotype', 'count', 'sample_group'],
 ).properties(
@@ -397,7 +501,7 @@ fractions_long = peruvian_transform(
 peruvian_bio_ev = peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group",
-  global_color_scale=global_color_scale,
+  global_color_scale=global_color_ct,
   dims=(200, 150)
 )
 
@@ -407,16 +511,20 @@ peruvian_bio_ev.show()
 ### Proportions Plot with added scRNA-seq cell type ratios {.unnumbered .unlisted}
 
 ```{python}
-# Define the mapping for cycle phases
-phase_mapping = {
-  "EP": "pro", "LP": "pro", "ES": "pre", "MS": "rec", "LS": "post"
-}
+# Define the specific mapping for cycle phases, that also summarises the proliferative phases into one
+prolif_mapping = { "EP": "PE", "LP": "PE" }
 
 # Calculate scRNA-seq percentages and prepare for concatenation
 sc_ratios_prep = (
   sc_dat.obs
   .query("cyclephase != 'Menstrual'") # Remove "Menstrual" phase samples
-  .assign(cyclephase_mapped=lambda df: df["cyclephase"].map(phase_mapping)) # Map to new phases
+  .assign(
+    cyclephase_mapped=lambda df: pd.Categorical(
+      df.cyclephase.map(prolif_mapping).fillna(df.cyclephase),
+      categories=["PE", "ES", "MS", "LS"], # Ensure correct order
+      ordered=True
+    )
+  )
   .groupby(["cyclephase_mapped", "celltype"])
   .size()
   .pipe(lambda s: (s / s.groupby(level="cyclephase_mapped").sum())) # Calculate percentages
@@ -433,19 +541,12 @@ sc_ratios_prep = (
 # Concatenate with the existing fractions_long and set cyclephase to categorical
 fractions_long = (
   pd.concat([fractions_long, sc_ratios_prep], ignore_index=True)
-  .assign(
-    cyclephase=lambda df: pd.Categorical(
-      df["cyclephase"],
-      categories=["pro", "pre", "rec", "post"], # Ensure correct order
-      ordered=True
-    )
-  )
 )
 
 peruvian_all = peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group",
-  global_color_scale=global_color_scale,
+  global_color_scale=global_color_ct,
   dims=(150, 100)
 )
 
@@ -459,8 +560,9 @@ biplot, pca = biplot_fractions(
   frac_pred,
   ccht_uf_pheno,
   color_field="cyclephase",
+  color_scale=global_color_phase,
   style_field="group",
-  text_limit = 0.02, # controls on how much labels are shown
+  text_limit = 0.05, # controls on how much labels are shown
   dims = (300, 250)
   )
 biplot.show()
@@ -482,13 +584,13 @@ def format_loadings(pca_obj, celltypes):
 pca_all = pca # save it with another name for clarity
 loadings_all = format_loadings(pca_all, frac_pred.columns).rename(columns={"Variance Explained": "Combined"}).set_index("Feature")
 
-pheno_tmp = ccht_uf_pheno.query("group == 'UF'")
+pheno_tmp = ccht_uf_pheno.query("group == 'UF-EV'")
 _, pca_uf = biplot_fractions(frac_pred.loc[pheno_tmp.index], pheno_tmp, color_field="cyclephase")
-loadings_uf = format_loadings(pca_uf, frac_pred.columns).rename(columns={"Variance Explained": "UF"}).set_index("Feature")
+loadings_uf = format_loadings(pca_uf, frac_pred.columns).rename(columns={"Variance Explained": "UF-EV"}).set_index("Feature")
 
-pheno_tmp = ccht_uf_pheno.query("group == 'biopsy'")
+pheno_tmp = ccht_uf_pheno.query("group == 'Tissue'")
 _, pca_bio = biplot_fractions(frac_pred.loc[pheno_tmp.index], pheno_tmp)
-loadings_bio = format_loadings(pca_bio, frac_pred.columns).rename(columns={"Variance Explained": "Biopsy"}).set_index("Feature")
+loadings_bio = format_loadings(pca_bio, frac_pred.columns).rename(columns={"Variance Explained": "Tissue"}).set_index("Feature")
 
 
 ## The plot part - visualise all the different loadings
@@ -529,9 +631,9 @@ def swap_groups(df, to_swap):
   return df
 
 # Configuration for data processing and plotting
-swapper = [("post", "rec"), ("rec", "pre"), ("pre", "pro")]
-comp_order = ["pro_vs_pre", "pre_vs_rec", "rec_vs_post"]
-cycle_order = ["pro", "pre", "rec", "post"]
+swapper = [("LS", "MS"), ("MS", "ES"), ("ES", "PE")]
+comp_order = ["PE_vs_ES", "ES_vs_MS", "MS_vs_LS"]
+cycle_order = ["PE", "ES", "MS", "LS"]
 plt_width, plt_height = (1000, 150) # Plot dimensions
 
 from itertools import product
@@ -580,7 +682,7 @@ stat_comb_prim = (
 )
 
 # Define heatmap cell height and calculate total plot height
-heatmap_target_cell_height = 50
+heatmap_target_cell_height = 40
 num_y_categories = stat_comb_prim.celltype.nunique()
 calculated_heatmap_height = heatmap_target_cell_height * num_y_categories if num_y_categories > 0 else plt_width
 
@@ -619,14 +721,14 @@ grey_background = base_chart.mark_rect().encode(
 yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
   y=alt.Y("celltype:N", sort=stat_comb_celltypes),
   xOffset=alt.value(10), # was yOffset, using o, increased for spacing
-  color=alt.Color("lineage:N").legend(None)
+  color=alt.Color("lineage:N", scale=global_color_lineage).legend(None)
 )
 
 # the significance testing texty part
 base_text = base_chart.encode(
   x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None))
 # Use dy for vertical positioning, dx for horizontal if needed (or align)
-text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, align="center", dy=-10).encode(
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-10).encode(
   text=alt.Text("p_stars"))
 text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
@@ -672,7 +774,7 @@ grey_background = base_chart.mark_rect().encode(
 yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(title=None),
   x2=alt.value(-10), # set to 0 to not draw it behind the main heatmap (shows small lines)
-  color=alt.Color("lineage:N")
+  color=alt.Color("lineage:N", scale=global_color_lineage)
 )
 
 # the significance testing texty part
@@ -680,7 +782,7 @@ yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
 base_text = base_chart.encode(
   x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None))
 # Use dy for vertical positioning of text
-text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=24, align="center", dy=-10).encode(
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-10).encode(
   text=alt.Text("p_stars"))
 text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
@@ -729,7 +831,7 @@ Here we focus on the comparison of the paired sample profiles from **both** biop
 
 ```{python}
 # Get unique cycle phases
-unique_cycle_phases = ccht_uf_pheno['cyclephase'].unique()
+unique_cycle_phases = ccht_uf_pheno.cyclephase.cat.categories
 
 # Initialize a list to store the plots
 phase_plots = []
@@ -753,15 +855,15 @@ for i, phase in enumerate(unique_cycle_phases):
     plot_title=f"Phase: {phase}",
     plot_width=max(150, len(frac_subset.index) * 20),
     plot_height=200,
+    group_color_scale=global_color_group,
+    lineage_color_scale=global_color_lineage,
     show_legend=show_legend_for_plot  # Pass the legend visibility argument
   )
 
   phase_plots.append(dendro_barplot_phase)
 
 # Combine the plots horizontally if there are any plots
-combined_plot = alt.hconcat(*phase_plots).resolve_scale(
-  color='shared'
-)
+combined_plot = alt.hconcat(*phase_plots).resolve_scale(color='shared')
 combined_plot.show()
 ```
 
@@ -773,7 +875,7 @@ combined_plot.show()
 prepped_pheno = (
   ccht_uf_pheno
   .loc[frac_pred.index]
-  .assign(HUT=lambda x: x.index.str.extract(r"(HUT\d+)", expand=False))
+  .assign(HUT=lambda x: x.index.str.extract(r"(S\d+)", expand=False))
   .sort_values(["cyclephase", "HUT"])
 )
 
@@ -786,7 +888,7 @@ corr_mat = (
   # transpose to run correlation against the samples
   frac_pred.loc[prepped_pheno.index].T.corr(method="spearman")
   # select out only cols with UF in columns and biopsy in rows
-  .filter(regex="UF", axis=0).filter(regex="biopsy", axis=1)
+  .filter(regex="UF", axis=0).filter(regex="tissue", axis=1)
   # stack it into long version for Altair
   .stack().rename("correlation").to_frame().reset_index(names=["y_vars", "x_vars"])
   # now add a cols with the locations of last groups
@@ -796,23 +898,23 @@ corr_mat = (
 ```
 
 ```{python}
-# Create Altair plot
+# create Altair plot
 base_heatmap = alt.Chart(corr_mat).mark_rect().encode(
-    x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
-    y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
-    color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
-  )
+  x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
+  y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
+  color=alt.Color('correlation:Q').scale(scheme='magma', domain=[0, 1]) # Quantitative for correlation values, using magma colormap with 0-1 domain
+)
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
   x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase:N"),
+  color=alt.Color("cyclephase:N", scale=global_color_phase),
   xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 y_group_colors = base_heatmap.mark_rect().encode(
   y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase_y:N").legend(None),
+  color=alt.Color("cyclephase_y:N", scale=global_color_phase).legend(None),
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
@@ -827,7 +929,6 @@ y_lines = alt.Chart(
 ).mark_rule(color='white', strokeWidth=2, yOffset=10).encode(
   y=alt.Y("y_vars:O", sort=corr_mat.y_vars.unique())
 )
-
 
 # Layer heatmap and colors
 final_chart = (
@@ -851,13 +952,13 @@ avg_cyclephase_correlation_matrix = (
 )
 
 # Create the heatmap
-# The sort=cycle_order argument ensures the phases are ordered as "pro", "pre", "rec", "post"
+# The sort=cycle_order argument ensures the phases are ordered as "pro", "pre", "rec", "LS"
 heatmap_avg_corr = alt.Chart(avg_cyclephase_correlation_matrix).mark_rect().encode(
     x=alt.X('biopsy_cyclephase:N', title='Biopsy Cycle Phase', sort=cycle_order),
     y=alt.Y('uf_cyclephase:N', title='UF Cycle Phase', sort=cycle_order).axis(orient='right'),
-    color=alt.Color('avg_correlation:Q', scale=alt.Scale(scheme='viridis'), legend=alt.Legend(title="Avg. Correlation"))
+    color=alt.Color('avg_correlation:Q', scale=alt.Scale(scheme='magma', domain=[0, 1]), legend=alt.Legend(title="Avg. Correlation"))
 ).properties(
-    title='Average Correlation between Biopsy and UF Samples by Cycle Phase',
+    title='Average Correlation between Tissue and UF-EV Samples by Cycle Phase',
     width=200,
     height=200
 )
@@ -866,7 +967,7 @@ heatmap_avg_corr = alt.Chart(avg_cyclephase_correlation_matrix).mark_rect().enco
 text_avg_corr = heatmap_avg_corr.mark_text(baseline='middle').encode(
     text=alt.Text('avg_correlation:Q', format='.2f'),
     color=alt.condition(
-        alt.datum.avg_correlation > 0.5,  # Adjust threshold for better contrast
+        alt.datum.avg_correlation < 0.6,  # Adjust threshold for better contrast
         alt.value('white'),
         alt.value('black')
     )
@@ -884,8 +985,8 @@ Here we transform the deconvolution profiles into a volcano plot, where we show 
 
 ```{python}
 ## calculate the diff
-avg_uf = frac_pred.loc[prepped_pheno.query("group == 'UF'").index,].agg("mean")
-avg_bio = frac_pred.loc[prepped_pheno.query("group == 'biopsy'").index,].agg("mean")
+avg_uf = frac_pred.loc[prepped_pheno.query("group == 'UF-EV'").index,].agg("mean")
+avg_bio = frac_pred.loc[prepped_pheno.query("group == 'Tissue'").index,].agg("mean")
 # calculate bonferroni correction for the p-values
 diff_df = (
   pd.DataFrame({"diff": avg_uf - avg_bio})
@@ -901,7 +1002,7 @@ volcano_base = alt.Chart(
 ).mark_point(
   filled=True, opacity=.7
 ).encode(
-  x=alt.X("diff:Q").scale(domain=[-.12, .12]).axis(title="Mean Proportion Difference (UF - Biopsy)", tickCount=4),
+  x=alt.X("diff:Q").scale(domain=[-.12, .12]).axis(title="Mean Proportion Difference (UF-EV - Tissue)", tickCount=4),
   y=alt.Y("p_adj_bonf:Q").scale(type="log", base=10, reverse=True).axis(title="Adjusted p-value (Bonferroni)", tickCount=8),
   color=alt.condition(alt.datum.p_adj_bonf < threshold_p, alt.value("red"), alt.value("grey"))
 )
@@ -959,8 +1060,11 @@ for i, phase in enumerate(unique_cycle_phases):
     phenotype_df=pheno_subset.drop(columns=["group"]).rename(columns={"dataset": "group"}),
     general_cells_df=general_cells,
     plot_title=f"Combined UF Samples: {phase.upper()}", # Title indicating the phase
-    plot_width=max(250, len(frac_subset.index) * 20), # Adjust width based on number of samples
+    plot_width=max(300, len(frac_subset.index) * 25), # Adjust width based on number of samples
     plot_height=150,
+    bar_width=16, # Width of the bar
+    group_color_scale=global_color_group2,
+    lineage_color_scale=global_color_lineage,
     show_legend=show_legend_for_plot
   )
   phase_plots.append(dendro_bar_phase_chart)
@@ -989,7 +1093,6 @@ corr_long = (
   corr_mat
   # stack it into long version for Altair
   .stack().rename("correlation").to_frame().reset_index(names=["y_vars", "x_vars"])
-  # Assign 'cyclephase_y' by mapping 'y_vars' to 'comb_uf_pheno.cyclephase'
   # Assign 'cyclephase_x' by mapping 'x_vars' to 'comb_uf_pheno.cyclephase'
   .assign(
     cyclephase_y = lambda df: df['y_vars'].map(comb_uf_pheno['cyclephase'].astype(str)),
@@ -1000,28 +1103,35 @@ corr_long = (
 
 ```{python}
 # Order the x and y samplenames based on cyclephase as defined with cycle_order
-ordnung_x = corr_long[["x_vars", "cyclephase_x"]].drop_duplicates(ignore_index=False)
+ordnung_x = (
+  corr_long[["x_vars", "cyclephase_x"]]
+  .drop_duplicates(ignore_index=False)
+  .sort_values("cyclephase_x", key=lambda x: pd.Categorical(x, categories=["ES", "MS"], ordered=True))
+  ["x_vars"]
+)
 ordnung_y = corr_long[["y_vars", "cyclephase_y"]].drop_duplicates(ignore_index=False)
+
 # Create Altair plot
 base_heatmap = alt.Chart(corr_long).mark_rect().encode(
   x=alt.X('x_vars:N', sort=ordnung_x, title=None).axis(offset=10),
   y=alt.Y('y_vars:N', sort=ordnung_y, title=None).axis(orient="right", offset=10),
-  color=alt.Color('correlation:Q').scale(scheme='magma') # Quantitative for correlation values, using magma colormap
+  color=alt.Color('correlation:Q').legend(title="Spearman's ρ").scale(scheme='magma', domain=[0, 1]) # Quantitative for correlation values, using magma colormap
   )
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
   x=alt.X('x_vars:N', sort=ordnung_x, title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase_x:N"), # leave legend in the x-axis as the default
+  color=alt.Color("cyclephase_x:N", scale=alt.Scale(domain=["ES", "MS"], range=[phase_colors["ES"], phase_colors["MS"]])).legend(None),
   yOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
 y_group_colors = base_heatmap.mark_rect().encode(
   y=alt.Y('y_vars:N', sort=ordnung_y, title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase_y:N").legend(None), # remove the legend from the y-axis to avoid duplication
+  color=alt.Color("cyclephase_y:N").legend(title="Cycle Phase").scale(
+    domain=["ES", "MS"], 
+    range=[phase_colors["ES"], phase_colors["MS"]]),
   xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
-
 
 # add horizontal and vertical lines to separate the groups
 x_lines = alt.Chart(
@@ -1057,23 +1167,27 @@ avg_cyclephase_correlation_matrix = (
 # Create the heatmap
 # The sort=cycle_order argument ensures the phases are ordered as "pro", "pre", "rec", "post"
 heatmap_avg_corr = alt.Chart(avg_cyclephase_correlation_matrix).mark_rect().encode(
-    x=alt.X('celvia_cyclephase:N', title='Celvia Cycle Phase', sort=cycle_order),
-    y=alt.Y('vigano_cyclephase:N', title='Vigano Cycle Phase', sort=cycle_order).axis(orient='right'),
-    color=alt.Color('avg_correlation:Q', scale=alt.Scale(scheme='viridis'), legend=alt.Legend(title="Avg. Correlation"))
+  x=alt.X('celvia_cyclephase:N', title='Celvia Cycle Phase', sort=cycle_order),
+  y=alt.Y('vigano_cyclephase:N', title='Vigano Cycle Phase', sort=cycle_order).axis(orient='right'),
+  color=alt.Color(
+    'avg_correlation:Q', 
+    scale=alt.Scale(scheme='magma', domain=[0, 1]), 
+    legend=alt.Legend(title="Avg. Correlation")
+    )
 ).properties(
-    title='Average Correlation between Celvia and Vigano Samples by Cycle Phase',
-    width=200,
-    height=200
+  title='Average Correlation between Celvia and Vigano Samples by Cycle Phase',
+  width=200,
+  height=200
 )
 
 # Create the text layer
 text_avg_corr = heatmap_avg_corr.mark_text(baseline='middle').encode(
-    text=alt.Text('avg_correlation:Q', format='.2f'),
-    color=alt.condition(
-        alt.datum.avg_correlation > 0.5,  # Adjust threshold for better contrast
-        alt.value('white'),
-        alt.value('black')
-    )
+  text=alt.Text('avg_correlation:Q', format='.2f'),
+  color=alt.condition(
+    alt.datum.avg_correlation < 0.6,  # Adjust threshold for better contrast
+    alt.value('white'),
+    alt.value('black')
+  )
 )
 
 # Combine heatmap and text
@@ -1103,7 +1217,7 @@ pca_one = alt.Chart(pca_df).mark_point(
 ).encode(
   x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
   y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-  color=alt.Color("dataset:N"),
+  color=alt.Color("dataset:N").scale(global_color_group2),
   shape=alt.Shape("cyclephase:N").scale(range=shape_range)
 ).properties(title="Deconvolution with batch correction", **dims)
 pca_one
@@ -1113,7 +1227,7 @@ pca_one
 
 ```{python}
 # filter out biopsy samples
-frac_tmp = frac_comb_raw.loc[~frac_comb_raw.index.str.contains("biopsy")]
+frac_tmp = frac_comb_raw.loc[~frac_comb_raw.index.str.contains("tissue")]
 # PCA calculation
 pca = PCA(n_components=2)
 pca_df = (
@@ -1129,7 +1243,7 @@ pca_two = alt.Chart(pca_df).mark_point(
 ).encode(
   x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
   y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-  color=alt.Color("dataset:N"),
+  color=alt.Color("dataset:N").scale(global_color_group2),
   shape=alt.Shape("cyclephase:N").scale(range=shape_range)
 ).properties(title="Deconvolution without batch correction", **dims)
 pca_two
@@ -1139,7 +1253,7 @@ pca_two
 
 ```{python}
 # filter out biopsy samples
-counts_tmp = comb_batch.T.loc[~comb_batch.T.index.str.contains("biopsy")]
+counts_tmp = comb_batch.T.loc[~comb_batch.T.index.str.contains("tissue")]
 # PCA calculation
 pca = PCA(n_components=2)
 pca_df = (
@@ -1155,7 +1269,7 @@ pca_three = alt.Chart(pca_df).mark_point(
 ).encode(
   x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
   y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-  color=alt.Color("dataset:N"),
+  color=alt.Color("dataset:N").scale(global_color_group2),
   shape=alt.Shape("cyclephase:N").scale(range=shape_range)
 ).properties(title="Raw counts with batch correction", **dims)
 pca_three
@@ -1165,7 +1279,7 @@ pca_three
 
 ```{python}
 # filter out biopsy samples
-counts_tmp = comb_raw.T.loc[~comb_raw.T.index.str.contains("biopsy")]
+counts_tmp = comb_raw.T.loc[~comb_raw.T.index.str.contains("tissue")]
 # PCA calculation
 pca = PCA(n_components=2)
 pca_df = (
@@ -1181,7 +1295,7 @@ pca_four = alt.Chart(pca_df).mark_point(
 ).encode(
   x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
   y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-  color=alt.Color("dataset:N"),
+  color=alt.Color("dataset:N").scale(global_color_group2),
   shape=alt.Shape("cyclephase:N").scale(range=shape_range)
 ).properties(title="Raw counts without batch correction", **dims)
 pca_four
@@ -1224,7 +1338,6 @@ sq.pl.spatial_scatter(
 
 ```{python}
 # and then show a single exemplary cell type in different projections
-# TODO: find a way to get the crop_coord from the adata object
 cts = ["Glandular"]
 
 sq.pl.spatial_scatter(
@@ -1265,6 +1378,7 @@ sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='celltype', title="Biopsy pS
 ```{python}
 # --- Data Preparation ---
 plot_df_pairwise = stats_df[stats_df['comparison'].isin(['ev_vs_ref', 'bio_vs_ref'])].copy()
+stats_df[["lineage", "celltype"]].drop_duplicates()
 exclude_metrics = ["Pearson Correlation"]  # Metrics to exclude from visualization
 col_wrap = 3  # Number of columns for facet wrapping
 
@@ -1479,7 +1593,7 @@ The correlation between techical replicates HUT71_biopsy, HUT71_biopsy_2, HUT71_
 
 ```{python}
 # Select columns containing "HUT71_biopsy"
-hut71_biopsy_samples = ccht_uf_unfilt_tpm.filter(regex="HUT71_biopsy")
+hut71_biopsy_samples = ccht_uf_unfilt_tpm.filter(regex=resampler["HUT71_biopsy_1"].replace("_1", ""))
 
 # Calculate the correlation between these samples
 correlation_hut71 = hut71_biopsy_samples.corr(method='spearman')
@@ -1518,7 +1632,7 @@ umap_df = umap_df.join(ccht_uf_pheno_unfilt[["cyclephase", "group"]]).reset_inde
 umap_plot_unfilt = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
   x=alt.X('UMAP1:Q', title='UMAP 1').scale(zero=False),
   y=alt.Y('UMAP2:Q', title='UMAP 2').scale(zero=False),
-  color=alt.Color('cyclephase:N', title='Cycle Phase'),
+  color=alt.Color('cyclephase:N').legend(title='Cycle Phase').scale(global_color_phase),
   shape=alt.Shape('group:N', title='Sample Group'),
   tooltip=['samplename', 'cyclephase', 'group']
 ).properties(
@@ -1544,7 +1658,7 @@ umap_df = umap_df.join(ccht_uf_pheno[["cyclephase", "group"]]).reset_index().ren
 umap_plot = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
   x=alt.X('UMAP1:Q', title='UMAP 1').scale(zero=False),
   y=alt.Y('UMAP2:Q', title='UMAP 2').scale(zero=False),
-  color=alt.Color('cyclephase:N', title='Cycle Phase'),
+  color=alt.Color('cyclephase:N').legend(title='Cycle Phase').scale(global_color_phase),
   shape=alt.Shape('group:N', title='Sample Group'),
   tooltip=['samplename', 'cyclephase', 'group']
 ).properties(
@@ -1567,12 +1681,15 @@ corr_mat_unfilt = ccht_uf_unfilt_tpm.corr(method='spearman')
 pheno_unfilt_idx = ccht_uf_pheno_unfilt.query("samplename in @corr_mat_unfilt.index")
 
 cyc_unfilt_u = pheno_unfilt_idx['cyclephase'].dropna().unique().tolist()
-cyc_pal_unfilt = sns.color_palette("husl", len(cyc_unfilt_u))
-cyc_map_unfilt = dict(zip(cyc_unfilt_u, cyc_pal_unfilt))
+cyc_map_unfilt = dict(zip(global_color_phase.domain, sns.color_palette(global_color_phase.range)))
 cyc_cols_unfilt = pd.Series([cyc_map_unfilt.get(phase) for phase in pheno_unfilt_idx['cyclephase']], index=pheno_unfilt_idx.index, name='cyclephase')
 
 grp_unfilt_u = pheno_unfilt_idx['group'].dropna().unique().tolist()
-grp_pal_unfilt = sns.color_palette("Set2", len(grp_unfilt_u))
+# Create a color map from the altair scale object
+grp_map_unfilt = dict(zip(global_color_group.domain, sns.color_palette(global_color_group.scheme.capitalize())))
+# Create the palette list in the order of the unique groups found in the data
+grp_pal_unfilt = [grp_map_unfilt[group] for group in grp_unfilt_u]
+
 grp_map_unfilt = dict(zip(grp_unfilt_u, grp_pal_unfilt))
 grp_cols_unfilt = pd.Series([grp_map_unfilt.get(group) for group in pheno_unfilt_idx['group']], index=pheno_unfilt_idx.index, name='group')
 
@@ -1603,13 +1720,11 @@ corr_mat = ccht_uf_tpm.corr(method='spearman')
 pheno = ccht_uf_pheno.query("samplename in @corr_mat.index")
 
 cyc = pheno['cyclephase'].dropna().unique().tolist()
-cyc_pal = sns.color_palette("husl", len(cyc))
-cyc_map = dict(zip(cyc, cyc_pal))
+cyc_map = dict(zip(global_color_phase.domain, sns.color_palette(global_color_phase.range)))
 cyc_cols = pd.Series([cyc_map.get(phase) for phase in pheno['cyclephase']], index=pheno.index, name='cyclephase')
 
 grp = pheno['group'].dropna().unique().tolist()
-grp_pal = sns.color_palette("Set2", len(grp))
-grp_map = dict(zip(grp, grp_pal))
+grp_map = dict(zip(global_color_group.domain, sns.color_palette(global_color_group.scheme.capitalize())))
 grp_cols = pd.Series([grp_map.get(group) for group in pheno['group']], index=pheno.index, name='group')
 
 row_colors_df = pd.DataFrame({"": cyc_cols, " ": grp_cols}, index=corr_mat.index)
@@ -1647,7 +1762,7 @@ sample_totals_top_biotypes = features_ev[top_biotypes].sum(axis=1)
 df_melted = (
   features_ev
   .reset_index()
-  .pipe(lambda df: df[df['samplename'].str.contains("HUT", na=False)])
+  .pipe(lambda df: df[df['samplename'].str.contains("S\\d+", na=False)])
   .melt(id_vars=['samplename'], value_vars=top_biotypes, var_name='biotype', value_name='count')
 )
 
@@ -1684,7 +1799,7 @@ biotype_prop.interactive()
 # Select relevant columns and samples
 cols_to_plot = ["reads_aligned_exonic", "reads_aligned_intronic", "reads_aligned_intergenic"]
 plot_data = qualimap_ev.reset_index().rename(columns={"index": "samplename"})
-plot_data = plot_data[plot_data['samplename'].str.contains("HUT", na=False)][["samplename"] + cols_to_plot].copy()
+plot_data = plot_data[plot_data['samplename'].str.contains("S\\d+", na=False)][["samplename"] + cols_to_plot].copy()
 
 # Calculate total reads for percentage calculation
 plot_data['total_reads'] = plot_data[cols_to_plot].sum(axis=1)
