@@ -442,7 +442,7 @@ Main points of interest:
 
 ```{python}
 # placeholder image
-study_schema = spacer_with_text(height=400, width=580)
+study_schema = spacer_with_text(height=500, width=750)
 ```
 
 ### Overview of the Samples {.unnumbered .unlisted}
@@ -452,21 +452,23 @@ study_schema = spacer_with_text(height=400, width=580)
 ```{python}
 # barplot of the number of samples throughout the cycle phase
 barplot_ev_sum = alt.Chart(ccht_uf_pheno).mark_bar().encode(
-  x=alt.X("cyclephase:N", sort=phases).title(""),
+  x=alt.X("cyclephase:N", sort=phases).title("").axis(labelAngle=0),
   y=alt.Y("count(group):Q").title("Nr. of Samples"),
   color=alt.Color("group:N", scale=global_color_group).legend(orient="bottom", titleOrient="left")
 ).properties(width=150, height=225)
+barplot_ev_sum.interactive()
+```
 
+```{python}
 # include single cell data overview as extra column
 barplot_sc_sum = alt.Chart(
   sc_dat.obs[["cyclephase", "samplename", "dataset"]].value_counts(["cyclephase", "dataset"]).reset_index()
 ).mark_bar().encode(
   x=alt.X("cyclephase:N", sort=phases).title("").axis(labelAngle=-45),
   y=alt.Y("count:Q").title("Nr. of Cells"),
-  color=alt.Color("dataset:N").legend(orient="bottom", titleOrient="top", columns=2)
-).properties(width=150, height=225)
-
-(barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent").interactive()
+  color=alt.Color("dataset:N").legend(orient="right", titleOrient="top", columns=1)
+).properties(width=150, height=200)
+barplot_sc_sum.interactive()
 ```
 
 ### Feature Counts {.unnumbered .unlisted}
@@ -476,45 +478,49 @@ Here we look at only the final samples that were selected for the analysis, the 
 Plot 10 top features per FeatureCounts output on log scale. Show the cutoff point for QC of 15% proteion coding RNA reads.
 
 ```{python}
-# Identify biotype columns and calculate total counts
-biotype_cols = features_ev.columns
-biotype_counts = features_ev[biotype_cols].sum().sort_values(ascending=False)
+# Get top 10 biotypes and prepare data
+top_biotypes = features_ev.sum().sort_values(ascending=False).head(6).index.tolist()
+sample_totals = features_ev[top_biotypes].sum(axis=1)
 
-# Get the top 15 biotypes
-top_biotypes = biotype_counts.head(15).index.tolist()
-
-# Melt the DataFrame for plotting, including only the top 5 biotypes
+# Create melted dataframe with percentages
 df_melted = (
   features_ev
   .reset_index()
+  .query("samplename in @frac_pred.index")
   .melt(id_vars=['samplename'], value_vars=top_biotypes, var_name='biotype', value_name='count')
+  .assign(
+    percentage=lambda x: x.apply(
+      lambda row: (row['count'] / sample_totals[row['samplename']]) * 100 
+      if sample_totals[row['samplename']] > 0 else 0, axis=1
+    ),
+    sample_group=lambda x: x['samplename'].apply(lambda s: 'Tissue' if 'tissue' in s else 'UF-EV')
+  )
 )
 
-# Create a new column for the sample group
-df_melted['sample_group'] = df_melted['samplename'].apply(lambda x: 'Tissue' if 'biopsy' in x else 'UF-EV')
+# Create protein_coding plot with threshold
+protein_coding_plot = alt.Chart(df_melted.query("biotype == 'protein_coding'")).mark_boxplot(extent=1.5).encode(
+  x=alt.X('biotype:N', title=None).axis(labelAngle=-30),
+  y=alt.Y('percentage:Q', title='Percentage (%)').scale(domain=(80, 100)),
+  color=alt.Color('sample_group:N', scale=global_color_group).legend(None),
+  xOffset='sample_group:N'
+).properties(height=200, width=60)
 
-# Create the grouped boxplot
-featurecounts_chart = alt.Chart(df_melted).mark_boxplot(extent=1.5).encode(
-  x=alt.X('biotype:N', title='Biotype', sort=top_biotypes).axis(labelAngle=-30),
-  y=alt.Y('count:Q', title='Count (log)').scale(type="log", nice=True).axis(values=[1e3, 1e4, 1e5, 1e6, 1e7, 1e8]),
-  color=alt.Color('sample_group:N', title='Sample Group', scale=global_color_group).legend(orient="top", titleOrient="left"),
-  xOffset='sample_group:N',
-  tooltip=['samplename', 'biotype', 'count', 'sample_group'],
-).properties(
-  height=150,
-  width=550
-)
+# Create other biotypes plot
+other_biotypes = [bt for bt in top_biotypes if bt != 'protein_coding']
+other_biotypes_plot = alt.Chart(df_melted.query("biotype != 'protein_coding'")).mark_boxplot(extent=1.5).encode(
+  x=alt.X('biotype:N', title='10 Top Biotypes', sort=other_biotypes).axis(labelAngle=-30),
+  y=alt.Y('percentage:Q', title=None),
+  color=alt.Color('sample_group:N', scale=global_color_group).legend(title="Sample Group", orient="right", titleOrient="top"),
+  xOffset='sample_group:N'
+).properties(height=200, width=300)
 
-featurecounts_chart.show()
+featurecounts_chart = protein_coding_plot | other_biotypes_plot
 ```
 
 :::
 
 ```{python}
-(
-  (study_schema & featurecounts_chart).resolve_scale(color="independent") | 
-  (barplot_ev_sum & barplot_sc_sum).resolve_scale(color="independent")
-)
+(study_schema & (featurecounts_chart | barplot_sc_sum).resolve_scale(color="independent"))
 ```
 
 ## FIG 2: Cell Type Deconvolution Profiles throughout the Menstrual Cycle
@@ -1706,12 +1712,12 @@ correlation_hut71 = hut71_biopsy_samples.corr(method='spearman')
 # Average correlation between replicates is
 # take it from the entry above the diagonal
 print_corr = correlation_hut71.where(np.triu(np.ones(correlation_hut71.shape), k=1).astype(bool)).stack().mean()
-print(f"Average correlation between HUT71 biopsy replicates: {print_corr:.2f}")
+print(f"Average correlation between tissue replicates: {print_corr:.2f}")
 
 # Optional: visualize with seaborn if desired for a nicer output in the report
 plt.figure(figsize=(4, 3))
 sns.heatmap(correlation_hut71, annot=True, cmap="viridis", fmt=".2f")
-plt.title("Correlation of HUT71 Biopsy Replicates")
+plt.title("Correlation of Tissue Replicates")
 plt.show()
 ```
 
@@ -1887,7 +1893,7 @@ sample_order = protein_coding_percentages.sort_values(ascending=False).index.tol
 biotype_prop = alt.Chart(df_melted).mark_bar().encode(
   x=alt.X('samplename:N', title='Sample', sort=sample_order, axis=alt.Axis(labelAngle=-45)), # Swapped from y, added labelAngle
   y=alt.Y('percentage:Q', title='Percentage (%)', scale=alt.Scale(domain=(.8, 1)), axis=alt.Axis(format='%')), # Swapped from x
-  color=alt.Color('biotype:N', title='Biotype', sort=top_biotypes, scale=alt.Scale(scheme='category10')),
+  color=alt.Color('biotype:N', title='Biotype', sort=top_biotypes, scale=alt.Scale(scheme='tableau10')),
   order=alt.Order('color_biotype_sort_index:Q') # sort by the color fields
 ).properties(
   width=alt.Step(12), # Adjust bar width by setting step, now applied to width
@@ -1945,7 +1951,7 @@ qualimap_plot = alt.Chart(plot_data_melted).mark_bar().encode(
 )
 
 # Add a rule (line) at y=85%
-rule = alt.Chart(pd.DataFrame({'percentage': [0.85]})).mark_rule(strokeDash=[5, 5], color='red').encode(
+rule = alt.Chart(pd.DataFrame({'percentage': [0.85]})).mark_rule(strokeDash=[5, 5], color='red', strokeWidth=3).encode(
   y=alt.Y('percentage:Q') # Rule is now horizontal
 )
 
@@ -1953,11 +1959,15 @@ qualimap_plot = (qualimap_plot + rule)
 qualimap_plot.interactive()
 ```
 
+
+:::
+
+
 Lower half of supp. fig. 1
 
 ```{python}
 supp_1 = (
-  biotype_prop & qualimap_plot |
+  (biotype_prop & qualimap_plot).resolve_scale(color="independent") |
     (umap_plot_unfilt & umap_plot).resolve_scale( x="independent", y="independent") 
   ).resolve_scale(
     x="independent", y="independent", color="independent", shape="independent"
@@ -1965,6 +1975,3 @@ supp_1 = (
 
 supp_1.interactive()
 ```
-
-:::
-
