@@ -99,6 +99,7 @@ Here we rename some variables, for example the "biopsy" becomes the "Tissue" gro
 #| output: false
 ## Load the single cell reference data
 sc_dat = an.read_h5ad(snapshot_an_loc)
+sc_dat.obs.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
 ```
 
 ```{python}
@@ -176,12 +177,6 @@ def convert_sample_names(sample_names):
   """
   Creates a mapping dictionary to convert sample names from 'HUT<number>_...'
   to 'S<number>_...' format, ensuring paired samples get the same 'S' number.
-
-  Args:
-    sample_names: A list of sample name strings.
-
-  Returns:
-    A dictionary mapping old sample names to new sample names.
   """
   # Find all unique HUT prefixes (e.g., 'HUT10', 'HUT23') from the sample names
   hut_prefixes = sorted(list(set(re.findall(r"(HUT\d+)", " ".join(sample_names)))))
@@ -261,6 +256,37 @@ qualimap_ev = (
 The color schemes that we are going to use
 
 ```{python}
+def create_lineage_aware_colors(general_cells_df):
+  """Create color mapping with unique colors within each lineage using tab20 palette."""
+
+  # Get the tab20 color palette using seaborn
+  default_colors = sns.color_palette("colorblind", n_colors=20)
+  alt_colors = sns.color_palette("tab20")
+  color_mapping = {}
+  
+  for lineage_idx, (lineage, group) in enumerate(general_cells_df.groupby('lineage')):
+    celltypes = group.index.tolist()
+    
+    # Use different color variations based on lineage index
+    if lineage_idx % 4 == 0:
+      colors_to_use = list(default_colors)
+    elif lineage_idx % 4 == 1:
+      colors_to_use = list(reversed(default_colors))
+    elif lineage_idx % 4 == 2:
+      colors_to_use = list(alt_colors)
+    else:  # lineage_idx % 4 == 3
+      colors_to_use = list(reversed(alt_colors))
+    
+    # For each lineage, use colors from the selected order
+    for i, celltype in enumerate(celltypes):
+      # Use modulo to cycle through colors if more celltypes than colors
+      color_idx = i % len(colors_to_use)
+      # Convert RGB tuple to hex string
+      color_hex = '#%02x%02x%02x' % tuple(int(c * 255) for c in colors_to_use[color_idx])
+      color_mapping[celltype] = color_hex
+  
+  return color_mapping
+
 phase_colors = {
   "Proliferative": "#006d2c", "PE": "#006d2c", "EP": "#6ed5ff", "LP": "#006d2c",
   "Pre-receptive": "#00BA38", "ES": "#00BA38", "Early-receptive": "#00BFC4",
@@ -281,7 +307,13 @@ global_color_phase = alt.Scale(domain=phases_subset, range=list(phase_colors_sub
 # color scale for the lineages
 global_color_lineage = alt.Scale(domain=general_cells.lineage.unique().tolist(), scheme="category10")
 # color scale for the celltypes
-global_color_ct = alt.Scale(domain=general_cells.index.unique().tolist(), scheme="tableau20")
+
+# Create the color mapping and scale
+celltype_colors = create_lineage_aware_colors(general_cells)
+global_color_ct = alt.Scale(
+  domain=list(celltype_colors.keys()), 
+  range=list(celltype_colors.values())
+)
 # color scale for the groups
 global_color_group = alt.Scale(domain=["Tissue", "UF-EV"], scheme="dark2")
 global_color_group2 = alt.Scale(domain=["UF-EV", "Giacomini EV"], range=["#00BFC4", "#F58633"])
@@ -292,9 +324,11 @@ The preprocessed spatial slides with spatial deconvolution
 
 ```{python}
 gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
-gen_ccht_ev = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+gen_ccht_ev = sc.read_h5ad(gen_sc_file)
+gen_ccht_ev.obs.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
 gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
-gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+gen_ccht_bio = sc.read_h5ad(gen_sc_file)
+gen_ccht_bio.obs.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
 ```
 
 ```{python}
@@ -311,6 +345,7 @@ adata_collection = {key: value for key, value in adata_collection.items() if key
 jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
 # but then read in the stats table anyways
 stats_df = pd.read_csv(Path(data_folder).expanduser() / "st_stats_table.csv", index_col=0)
+stats_df.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
 ```
 
 # Methods
@@ -563,7 +598,7 @@ biplot, pca = biplot_fractions(
   color_scale=global_color_phase,
   style_field="group",
   text_limit = 0.05, # controls on how much labels are shown
-  dims = (300, 250)
+  dims = (380, 280)
   )
 biplot.show()
 ```
@@ -604,12 +639,12 @@ loadings_combined = (
 loadings_plt = alt.Chart(loadings_combined).mark_line(
     point=alt.OverlayMarkDef(filled=False, fill="white", size=10)
   ).encode(
-  x=alt.X("Feature:N", sort=None).axis(labelAngle=-60),
+  x=alt.X("Feature:N", sort=None).axis(labelAngle=-45),
   y=alt.Y("Variance Explained:Q"),
   color=alt.Color("Group:N")
 ).properties(
   title='Loadings for Principal Component',
-  width=400,
+  width=500,
   height=200
 )
 
@@ -634,7 +669,7 @@ def swap_groups(df, to_swap):
 swapper = [("LS", "MS"), ("MS", "ES"), ("ES", "PE")]
 comp_order = ["PE_vs_ES", "ES_vs_MS", "MS_vs_LS"]
 cycle_order = ["PE", "ES", "MS", "LS"]
-plt_width, plt_height = (1000, 150) # Plot dimensions
+plt_width, plt_height = (1000, 130) # Plot dimensions
 
 from itertools import product
 
@@ -671,7 +706,7 @@ stat_comb_prim = (
     meandiff_format=lambda x: "Δ " + x.meandiff.mul(100).round(2).astype(str) + "%",
     padj_format=lambda x: np.select(
         [x["p-adj"].isna(), x["p-adj"] < 0.01],
-        ["FDR NA", "FDR <0.01"],
+        ["FDR NA", "FDR<0.01"],
         default="FDR " + x["p-adj"].round(2).astype(str)
     )
   ).join(general_cells, on="celltype") # Add lineage information
@@ -705,7 +740,7 @@ stat_tmp_groups = pd.DataFrame({
 
 # set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-45, ticks=True, title=None),
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-30, ticks=True, title=None),
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=True, title=None)
 )
 
@@ -728,12 +763,18 @@ yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
 base_text = base_chart.encode(
   x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None))
 # Use dy for vertical positioning, dx for horizontal if needed (or align)
-text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-10).encode(
-  text=alt.Text("p_stars"))
-text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
-text_overlay_diff = base_text.mark_text(fontSize=10, align="center", dy=12).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-8).encode(
+  text=alt.Text("p_stars"),
+  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+)
+text_overlay_pval = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")),
+  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+)
+text_overlay_diff = base_text.mark_text(fontSize=9, align="center", dy=12).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")),
+  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+)
 
 comp_stats_bio_plt = (
   yaxis_color_strip + grey_background + heatmap +
@@ -758,7 +799,7 @@ stat_tmp_groups = pd.DataFrame({
 
 # set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-45, ticks=True, title=None, titleY=25),
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-30, ticks=True, title=None, titleY=25),
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=False, ticks=False, title=None)
 )
 
@@ -782,12 +823,18 @@ yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
 base_text = base_chart.encode(
   x=alt.X("comparison:N", sort=comp_order).axis(labels=False, ticks=False, title=None))
 # Use dy for vertical positioning of text
-text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-10).encode(
-  text=alt.Text("p_stars"))
-text_overlay_pval = base_text.mark_text(fontSize=10, align="center", dy=0).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")))
-text_overlay_diff = base_text.mark_text(fontSize=10, align="center", dy=12).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")))
+text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-8).encode(
+  text=alt.Text("p_stars"),
+  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+)
+text_overlay_pval = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")),
+  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+)
+text_overlay_diff = base_text.mark_text(fontSize=9, align="center", dy=12).encode(
+  text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")),
+  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+)
 
 comp_stats_uf_plt = (
   yaxis_color_strip + grey_background + heatmap +
@@ -853,8 +900,8 @@ for i, phase in enumerate(unique_cycle_phases):
     phenotype_df=pheno_subset,
     general_cells_df=general_cells,
     plot_title=f"Phase: {phase}",
-    plot_width=max(150, len(frac_subset.index) * 20),
-    plot_height=200,
+    plot_width=max(80, len(frac_subset.index) * 20),
+    plot_height=150,
     group_color_scale=global_color_group,
     lineage_color_scale=global_color_lineage,
     show_legend=show_legend_for_plot  # Pass the legend visibility argument
@@ -902,13 +949,13 @@ corr_mat = (
 base_heatmap = alt.Chart(corr_mat).mark_rect().encode(
   x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None).axis(offset=10),
   y=alt.Y('y_vars:O', sort=corr_mat.y_vars.unique(), title=None).axis(orient="right", offset=10),
-  color=alt.Color('correlation:Q').scale(scheme='magma', domain=[0, 1]) # Quantitative for correlation values, using magma colormap with 0-1 domain
+  color=alt.Color('correlation:Q').scale(scheme='magma', domain=[0, .8]).title("Spearman's ρ") # Quantitative for correlation values, using magma colormap with 0-1 domain
 )
 
 # add the color groupings 
 x_group_colors = base_heatmap.mark_rect().encode(
   x=alt.X('x_vars:O', sort=corr_mat.x_vars.unique(), title=None), # Nominal for categorical x-axis
-  color=alt.Color("cyclephase:N", scale=global_color_phase),
+  color=alt.Color("cyclephase:N", scale=global_color_phase).title("Cycle Phase"),
   xOffset=alt.value(10), # set it to +10 of the plot height so that it would overlap
 )
 
@@ -1345,7 +1392,7 @@ sq.pl.spatial_scatter(
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Reference",
+  size=1.3, title="Glandular - Reference scRNA-seq",
   figsize=(6, 3),
 )
 sq.pl.spatial_scatter(
@@ -1353,7 +1400,7 @@ sq.pl.spatial_scatter(
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Projected EV",
+  size=1.3, title="Glandular - Generated pUF-EV",
   figsize=(6, 3),
 )
 sq.pl.spatial_scatter(
@@ -1361,16 +1408,74 @@ sq.pl.spatial_scatter(
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Projected Biopsy",
+  size=1.3, title="Glandular - Generated Tissue",
   figsize=(6, 3),
 )
 ```
 
 ### Example of the UMAP clustering of generated single cell data
 
+The cell types are now separated by the lineage class they belong to.
+
 ```{python}
-sc.pl.embedding(gen_ccht_ev, basis='X_umap', color='celltype', title="EV pSC UMAP", legend_loc="on data", legend_fontsize=7)
-sc.pl.embedding(gen_ccht_bio, basis='X_umap', color='celltype', title="Biopsy pSC UMAP", legend_loc="on data", legend_fontsize=7)
+# Also plot the tissue data for comparison
+unique_lineages_bio = gen_ccht_bio.obs['lineage'].unique()
+color_map_dict = celltype_colors
+# Add gray color for all unique lineages
+color_map_dict["Other"] = 'lightgray'
+
+def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 3)):
+  """Plot UMAP for both tissue and EV datasets for a specific lineage."""
+  def mask_celltype_by_lineage(adata, lineage):
+    """Mask celltypes not in the current lineage."""
+    temp_adata = adata.copy()
+    temp_adata.obs['celltype_masked'] = (
+      temp_adata.obs['celltype']
+      .astype(str)
+      .where(temp_adata.obs['lineage'] == lineage, other="Other")
+      .pipe(lambda s: pd.Categorical(
+        s, 
+        categories=[val for val in s.unique() if val != "Other"] + 
+                    (["Other"] if "Other" in s.unique() else []),
+        ordered=True
+      ))
+    )
+    return temp_adata
+  
+  # Mask celltypes for both datasets
+  temp_adata_bio = mask_celltype_by_lineage(adata_bio, lineage)
+  temp_adata_ev = mask_celltype_by_lineage(adata_ev, lineage)
+  
+  # Create subplot
+  fig, axes = plt.subplots(1, 2, figsize=figsize)
+  fig.suptitle(f"{lineage} Lineage", fontsize=14, y=1.02)
+  
+  # Plot tissue data
+  sc.pl.embedding(
+    temp_adata_bio, 
+    basis='X_umap', color='celltype_masked', title="Tissue pSC", 
+    legend_loc="right margin", legend_fontsize=7, legend_fontoutline=2,
+    palette=color_map_dict,
+    ax=axes[0],
+    show=False
+  )
+  
+  # Plot EV data
+  sc.pl.embedding(
+    temp_adata_ev, 
+    basis='X_umap', color='celltype_masked', title="UF-EV pSC", 
+    legend_loc="right margin", legend_fontsize=7, legend_fontoutline=2,
+    palette=color_map_dict,
+    ax=axes[1],
+    show=False
+  )
+  
+  plt.tight_layout()
+  plt.show()
+
+# Plot for all lineages
+for lineage in unique_lineages_bio:
+  plot_lineage_umap(gen_ccht_bio, gen_ccht_ev, lineage, color_map_dict)
 ```
 
 ### The boxplots of different comparison methods
