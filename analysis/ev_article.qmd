@@ -105,7 +105,7 @@ sc_dat.obs.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
 ```{python}
 #| output: false
 ## Create name remappers for the groups
-cyclephase_remap = { "pro": "PE", "pre": "ES", "rec": "MS", "post": "LS" }
+cyclephase_remap = { "pro": "P", "pre": "ES", "rec": "MS", "post": "LS" }
 group_remap = { "UF": "UF-EV", "biopsy": "Tissue" }
 group2_remap = { "HUT": "UF-EV", "Vigano": "Giacomini EV" }
 
@@ -288,9 +288,9 @@ def create_lineage_aware_colors(general_cells_df):
   return color_mapping
 
 phase_colors = {
-  "Proliferative": "#006d2c", "PE": "#006d2c", "EP": "#6ed5ff", "LP": "#006d2c",
+  "Proliferative": "#006d2c", "P": "#006d2c", "EP": "#6ed5ff", "LP": "#006d2c",
   "Pre-receptive": "#00BA38", "ES": "#00BA38", "Early-receptive": "#00BFC4",
-  "Receptive": "#619CFF", "MS": "#619CFF",
+  "Receptive": "#619CFF", "MS": "#619CFF", "Secretory": "#619CFF",
   "Late-receptive": "#F58633", "Post-receptive": "#D11141", "LS": "#D11141",
   "Menstrual": "#d11141",
   "HRT+3": "#00BA38", "HRT+4": "#00BFC4", "HRT+5": "#619CFF", "HRT+6": "#F58633", "HRT+7": "#D11141",
@@ -301,7 +301,7 @@ phases = list(phase_colors.keys())
 phcolors = list(phase_colors.values())
 # color scale for the cycle phases
 global_color_phase_all = alt.Scale(domain=phases, range=phcolors)
-phases_subset = ["PE", "ES", "MS", "LS"]
+phases_subset = ["P", "ES", "MS", "LS"]
 phase_colors_subset = {k: phase_colors[k] for k in phases_subset if k in phase_colors}
 global_color_phase = alt.Scale(domain=phases_subset, range=list(phase_colors_subset.values()))
 # color scale for the lineages
@@ -317,6 +317,7 @@ global_color_ct = alt.Scale(
 # color scale for the groups
 global_color_group = alt.Scale(domain=["Tissue", "UF-EV"], scheme="dark2")
 global_color_group2 = alt.Scale(domain=["UF-EV", "Giacomini EV"], range=["#00BFC4", "#F58633"])
+global_color_group3 = alt.Scale(domain=["Tissue", "UF-EV", "scRNA-seq"], scheme="dark2")
 ```
 
 
@@ -442,7 +443,7 @@ Main points of interest:
 
 ```{python}
 # placeholder image
-study_schema = spacer_with_text(height=500, width=750)
+study_schema = spacer_with_text(height=500, width=800)
 ```
 
 ### Overview of the Samples {.unnumbered .unlisted}
@@ -455,7 +456,7 @@ barplot_ev_sum = alt.Chart(ccht_uf_pheno).mark_bar().encode(
   x=alt.X("cyclephase:N", sort=phases).title("").axis(labelAngle=0),
   y=alt.Y("count(group):Q").title("Nr. of Samples"),
   color=alt.Color("group:N", scale=global_color_group).legend(orient="bottom", titleOrient="left")
-).properties(width=150, height=225)
+).properties(width=150, height=120)
 barplot_ev_sum.interactive()
 ```
 
@@ -467,7 +468,7 @@ barplot_sc_sum = alt.Chart(
   x=alt.X("cyclephase:N", sort=phases).title("").axis(labelAngle=-45),
   y=alt.Y("count:Q").title("Nr. of Cells"),
   color=alt.Color("dataset:N").legend(orient="right", titleOrient="top", columns=1)
-).properties(width=150, height=200)
+).properties(width=150, height=150)
 barplot_sc_sum.interactive()
 ```
 
@@ -503,7 +504,7 @@ protein_coding_plot = alt.Chart(df_melted.query("biotype == 'protein_coding'")).
   y=alt.Y('percentage:Q', title='Percentage (%)').scale(domain=(80, 100)),
   color=alt.Color('sample_group:N', scale=global_color_group).legend(None),
   xOffset='sample_group:N'
-).properties(height=200, width=60)
+).properties(height=150, width=60)
 
 # Create other biotypes plot
 other_biotypes = [bt for bt in top_biotypes if bt != 'protein_coding']
@@ -512,7 +513,7 @@ other_biotypes_plot = alt.Chart(df_melted.query("biotype != 'protein_coding'")).
   y=alt.Y('percentage:Q', title=None),
   color=alt.Color('sample_group:N', scale=global_color_group).legend(title="Sample Group", orient="right", titleOrient="top"),
   xOffset='sample_group:N'
-).properties(height=200, width=300)
+).properties(height=150, width=300)
 
 featurecounts_chart = protein_coding_plot | other_biotypes_plot
 ```
@@ -553,7 +554,7 @@ peruvian_bio_ev.show()
 
 ```{python}
 # Define the specific mapping for cycle phases, that also summarises the proliferative phases into one
-prolif_mapping = { "EP": "PE", "LP": "PE" }
+prolif_mapping = { "EP": "P", "LP": "P" }
 
 # Calculate scRNA-seq percentages and prepare for concatenation
 sc_ratios_prep = (
@@ -562,7 +563,7 @@ sc_ratios_prep = (
   .assign(
     cyclephase_mapped=lambda df: pd.Categorical(
       df.cyclephase.map(prolif_mapping).fillna(df.cyclephase),
-      categories=["PE", "ES", "MS", "LS"], # Ensure correct order
+      categories=["P", "ES", "MS", "LS"], # Ensure correct order
       ordered=True
     )
   )
@@ -672,9 +673,9 @@ def swap_groups(df, to_swap):
   return df
 
 # Configuration for data processing and plotting
-swapper = [("LS", "MS"), ("MS", "ES"), ("ES", "PE")]
-comp_order = ["PE_vs_ES", "ES_vs_MS", "MS_vs_LS"]
-cycle_order = ["PE", "ES", "MS", "LS"]
+swapper = [("LS", "MS"), ("MS", "ES"), ("ES", "P")]
+comp_order = ["P_vs_ES", "ES_vs_MS", "MS_vs_LS"]
+cycle_order = ["P", "ES", "MS", "LS"]
 plt_width, plt_height = (1000, 130) # Plot dimensions
 
 from itertools import product
@@ -1452,15 +1453,22 @@ def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 
   temp_adata_bio = mask_celltype_by_lineage(adata_bio, lineage)
   temp_adata_ev = mask_celltype_by_lineage(adata_ev, lineage)
   
-  # Create subplot
+  # Create subplot with fixed size
   fig, axes = plt.subplots(1, 2, figsize=figsize)
-  fig.suptitle(f"{lineage} Lineage", fontsize=14, y=1.02)
+  # Disable automatic tight_layout which can resize plots
+  fig.subplots_adjust(left=0.05, right=0.85, top=0.9, bottom=0.1, wspace=0.2)
+  # Add lineage title to the right edge
+  fig.text(-.015, 0.5, f"{lineage}", rotation=90, va='center', ha='left', 
+      fontsize=14, transform=fig.transFigure)
   
   # Plot tissue data
+  # Set the figure size explicitly before plotting
+  axes[0].set_aspect('equal')  # Keep aspect ratio
+  
   sc.pl.embedding(
     temp_adata_bio, 
     basis='X_umap', color='celltype_masked', title="Tissue pSC", 
-    legend_loc="right margin", legend_fontsize=7, legend_fontoutline=2,
+    legend_loc=None,
     palette=color_map_dict,
     ax=axes[0],
     show=False
@@ -1476,7 +1484,26 @@ def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 
     show=False
   )
   
-  plt.tight_layout()
+  # Ensure all colors from the lineage are shown in the legend
+  # Get all celltypes for this lineage from the original data
+  lineage_celltypes = general_cells[general_cells['lineage'] == lineage].index.tolist()
+  
+  # Create custom legend patches for all celltypes in this lineage
+  legend_patches = [
+    mpatches.Patch(color=color_map_dict[ct], label=ct) 
+    for ct in lineage_celltypes + ["Other"] if ct in color_map_dict
+  ]
+  
+  # Add the legend to the right subplot
+  axes[1].legend(
+    handles=legend_patches, 
+    loc='center left', 
+    bbox_to_anchor=(1, 0.5),
+    fontsize=10,
+    frameon=False
+  )
+  
+  # plt.tight_layout()
   plt.show()
 
 # Plot for all lineages
@@ -1539,8 +1566,8 @@ scatter_df.dropna(inplace=True) # Drop rows if one comparison is missing
 # 1. Define the base scatter plot layer
 # Data will be passed during faceting because we layer first
 points = alt.Chart().mark_point(filled=True, size=60, opacity=0.7).encode(
-  x=alt.X('ev_vs_ref', title='EV vs REF'), # Set axis title
-  y=alt.Y('bio_vs_ref', title='BIO vs REF'), # Set axis title
+  x=alt.X('ev_vs_ref', title='UF-EV pSC vs scRNA-seq'), # Set axis title
+  y=alt.Y('bio_vs_ref', title='Tissue pSC vs scRNA-seq'), # Set axis title
   color=alt.Color('celltype', legend=alt.Legend(title="Celltype", orient='bottom-right', labelFontSize=9, offset=0)), # Add legend title
   tooltip=['slide_id', 'celltype', 'lineage', 'ev_vs_ref', 'bio_vs_ref'] # Tooltips
 )
@@ -1582,7 +1609,7 @@ corr_plots = chart_layers.facet(
   color='independent' # Don't share color scale/limits
 ).properties(
   title=alt.TitleParams( # Set overall title
-      f'{metric_to_plot}: EV vs REF & BIO vs REF',
+      f'{metric_to_plot}: UF-EV pSC vs scRNA-seq & Tissue pSC vs scRNA-seq',
       anchor='middle' # Center the title
       )
 )
@@ -1608,6 +1635,7 @@ moran_pivot = (
   )
   .reset_index()
   .rename_axis(None, axis=1) # Remove the 'metric' name from columns index
+  .replace({"comparison": {"bio": "Tissue", "ev": "UF-EV", "ref": "scRNA-seq"}}) # Rename comparison values
 )
 
 # Create dummy slide_id by appending comparison
@@ -1632,21 +1660,19 @@ heatmap_cols_info = col_info.reindex(heatmap_data.columns)
 
 # 1. Cyclephase colors
 unique_cyclephases = heatmap_cols_info['cyclephase'].dropna().unique()
-palette_cycle = sns.color_palette("husl", len(unique_cyclephases))
-cyclephase_color_map = dict(zip(unique_cyclephases, palette_cycle))
+cyclephase_color_map = {k: v for k, v in phase_colors.items() if k in unique_cyclephases}
 cyclephase_colors = heatmap_cols_info['cyclephase'].map(cyclephase_color_map)
 
 # 2. Comparison colors
 unique_comparisons = heatmap_cols_info['comparison'].dropna().unique()
-palette_comp = sns.color_palette("Set2", len(unique_comparisons))
-comparison_color_map = dict(zip(unique_comparisons, palette_comp))
+comparison_color_map = dict(zip(unique_comparisons, sns.color_palette(global_color_group3.scheme.capitalize(), len(unique_comparisons))))
 comparison_colors = heatmap_cols_info['comparison'].map(comparison_color_map)
 
 # Combine into a DataFrame for clustermap
 # Providing a DataFrame to col_colors automatically triggers legend creation by seaborn
 col_colors_df = pd.DataFrame({
   'Cycle Phase': cyclephase_colors,
-  'Projection dataset': comparison_colors
+  'Generated dataset': comparison_colors
 })
 col_colors_df.index = heatmap_data.columns # Ensure index matches heatmap columns
 
@@ -1662,15 +1688,18 @@ g = sns.clustermap(
   figsize=(9, 9) # Adjust figsize if legends are cramped or cut off
 )
 
+# Angle the x-axis labels
+g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=45, ha='right')
+
 # Create handles for Cycle Phase legend
 cycle_handles = [mpatches.Patch(color=cyclephase_color_map[name], label=name) for name in unique_cyclephases]
 # Add the first legend - Position relative to the FIGURE edge
-legend1 = g.fig.legend(handles=cycle_handles, title='Cycle Phase', bbox_to_anchor=(0.78, 1), loc='upper left', borderaxespad=0.)
+legend1 = g.fig.legend(handles=cycle_handles, title='Cycle Phase', bbox_to_anchor=(0.80, 1), loc='upper left', borderaxespad=0., frameon=False, alignment='left')
 
 # Create handles for Projection dataset legend
 comp_handles = [mpatches.Patch(color=comparison_color_map[name], label=name) for name in unique_comparisons]
 # Add the second legend - Position below the first one
-legend2 = g.fig.legend(handles=comp_handles, title='Projection dataset', bbox_to_anchor=(0.78, 0.92), loc='upper left', borderaxespad=0.)
+legend2 = g.fig.legend(handles=comp_handles, title='Generated dataset', bbox_to_anchor=(0.80, 0.93), loc='upper left', borderaxespad=0., frameon=False, alignment='left')
 
 plt.suptitle("Clustered Heatmap of Significant Moran's I (FDR < 0.05)", y=1.02) # Add title
 plt.show() # Display the plot
@@ -1779,10 +1808,10 @@ umap_plot = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
 )
 ```
 
-Plot the UMAPs side by side
+Plot the UMAPs below each other for comparison.
 
 ```{python}
-umap_plot_unfilt | umap_plot
+umap_plot_unfilt & umap_plot
 ```
 
 ### Correlation plot of the unfiltered sampleset {.unnumbered .unlisted}
@@ -1959,15 +1988,13 @@ qualimap_plot = (qualimap_plot + rule)
 qualimap_plot.interactive()
 ```
 
-
 :::
-
 
 Lower half of supp. fig. 1
 
 ```{python}
 supp_1 = (
-  (biotype_prop & qualimap_plot).resolve_scale(color="independent") |
+  (biotype_prop & qualimap_plot).resolve_scale(color="independent", y="independent", x="independent") |
     (umap_plot_unfilt & umap_plot).resolve_scale( x="independent", y="independent") 
   ).resolve_scale(
     x="independent", y="independent", color="independent", shape="independent"
