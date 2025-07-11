@@ -265,3 +265,4 @@ for vis_fold in slides_path.iterdir():
     vis_dat_proj = model_obj.cell2location()
     vis_dat_proj.write(gen_st_file)
     del model_obj
+```

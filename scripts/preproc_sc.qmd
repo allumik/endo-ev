@@ -68,7 +68,7 @@ cyclephase_to_include = ["LS", "LP", "EP", "ES", "MS", "Menstrual"]
 
 ```{python}
 snapshot_an_loc = Path(data_folder) / "sc_deconv_snapshot.h5ad"
-if not snapshot_an_loc.exists():
+if snapshot_an_loc.exists():
   ## Load the main HECA dataset if not already formatted
   sc_dat = sc.read_h5ad(
     Path(raw_data_folder).expanduser() / "endometriumAtlasV2_cells_with_counts.h5ad",

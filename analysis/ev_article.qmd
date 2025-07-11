@@ -315,7 +315,7 @@ global_color_ct = alt.Scale(
   range=list(celltype_colors.values())
 )
 # color scale for the groups
-global_color_group = alt.Scale(domain=["Tissue", "UF-EV"], scheme="dark2")
+global_color_group = alt.Scale(domain=["Tissue", "UF-EV"], scheme="set2")
 global_color_group2 = alt.Scale(domain=["UF-EV", "Giacomini EV"], range=["#00BFC4", "#F58633"])
 global_color_group3 = alt.Scale(domain=["Tissue", "UF-EV", "scRNA-seq"], scheme="dark2")
 ```
@@ -521,7 +521,7 @@ featurecounts_chart = protein_coding_plot | other_biotypes_plot
 :::
 
 ```{python}
-(study_schema & (featurecounts_chart | barplot_sc_sum).resolve_scale(color="independent"))
+(study_schema & (featurecounts_chart | barplot_ev_sum).resolve_scale(color="independent"))
 ```
 
 ## FIG 2: Cell Type Deconvolution Profiles throughout the Menstrual Cycle
@@ -1516,6 +1516,7 @@ for lineage in unique_lineages_bio:
 ```{python}
 # --- Data Preparation ---
 plot_df_pairwise = stats_df[stats_df['comparison'].isin(['ev_vs_ref', 'bio_vs_ref'])].copy()
+plot_df_pairwise = plot_df_pairwise.query("lineage in ['Epithelial', 'Stromal', 'Immune']") # Filter for relevant lineages
 stats_df[["lineage", "celltype"]].drop_duplicates()
 exclude_metrics = ["Pearson Correlation"]  # Metrics to exclude from visualization
 col_wrap = 3  # Number of columns for facet wrapping
@@ -1609,9 +1610,9 @@ corr_plots = chart_layers.facet(
   color='independent' # Don't share color scale/limits
 ).properties(
   title=alt.TitleParams( # Set overall title
-      f'{metric_to_plot}: UF-EV pSC vs scRNA-seq & Tissue pSC vs scRNA-seq',
-      anchor='middle' # Center the title
-      )
+    f'{metric_to_plot}: UF-EV pSC vs scRNA-seq & Tissue pSC vs scRNA-seq',
+    anchor='middle' # Center the title
+  )
 )
 
 # Display the chart
