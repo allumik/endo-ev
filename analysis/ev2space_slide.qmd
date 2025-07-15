@@ -6,14 +6,23 @@ Next, we try out the classical spatial deconvolution method `Tangram` to integra
 # show the example slide sample
 sq.pl.spatial_scatter(
   vis_dats[example_sample].to_memory(),
-  color=[None, "log1p_total_counts"],
-  ncols=2
+  color=[None, "log1p_total_counts", "log1p_n_genes_by_counts"],
+  figsize=(3, 4), # Define overall figure size (width, height)
+  ncols=3
   )
 ```
 
 ```{python}
 def plotter_spat(gen_data, vis_data, ct_group):
-  cts = ( # avoid some errors from celltypes having same name as genes
+  """
+  Generates and displays faceted spatial scatter plots for specified cell types.
+
+  Args:
+    gen_data: An AnnData object containing the gene expression data and cell metadata.
+    vis_data: An AnnData object containing the spatial coordinates and data to be visualized.
+    ct_group: A string specifying the lineage group to be plotted.
+  """
+  cts = (
     gen_data.obs
     .query("(lineage==@ct_group) & celltype not in @vis_data.var.index & celltype in @vis_data.obs.columns")
     .celltype
@@ -23,7 +32,11 @@ def plotter_spat(gen_data, vis_data, ct_group):
     vis_data,
     cmap='magma',
     color=cts,
-    ncols=3, size=1.3
+    ncols=3,
+    size=1.5,
+    figsize=(3, 4), # Define overall figure size (width, height)
+    wspace=0.1, # Adjusts the width space between plots
+    hspace=0.2  # Adjusts the height space between plots
   )
 ```
 

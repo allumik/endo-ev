@@ -589,7 +589,7 @@ peruvian_all = peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group",
   global_color_scale=global_color_ct,
-  dims=(150, 100)
+  dims=(150, 125)
 )
 
 peruvian_all.show()
