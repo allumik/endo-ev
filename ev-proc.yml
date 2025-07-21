@@ -1,4 +1,4 @@
-name: endo_ev_preproc
+name: ev-proc
 channels:
   - pytorch
   - nvidia
