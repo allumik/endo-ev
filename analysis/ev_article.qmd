@@ -1732,7 +1732,7 @@ comp_handles = [mpatches.Patch(color=comparison_color_map[name], label=name) for
 legend2 = g.fig.legend(handles=comp_handles, title='Generated dataset', bbox_to_anchor=(0.80, 0.93), loc='upper left', borderaxespad=0., frameon=False, alignment='left')
 
 plt.suptitle("Clustered Heatmap of Significant Moran's I (FDR < 0.05)", y=1.02) # Add title
-plt.savefig(fig_loc / "fig_s5c.svg", bbox_inches='tight', dpi=300) # Save the figure
+plt.savefig(fig_loc / "fig_5c.svg", bbox_inches='tight', dpi=300) # Save the figure
 plt.show() # Display the plot
 ```
 
