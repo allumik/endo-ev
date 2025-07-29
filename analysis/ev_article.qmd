@@ -69,6 +69,7 @@ st_folder = getenv("ST_FOLDER")
 raw_data_folder = getenv("RAW_DATA_FOLDER")
 
 # some other dataset locations
+fig_loc = Path(proj_folder).expanduser() / "figures"
 snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
 comb_data_loc = Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather"
 comb_raw_data_loc = Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather"
@@ -521,7 +522,11 @@ featurecounts_chart = protein_coding_plot | other_biotypes_plot
 :::
 
 ```{python}
-(study_schema & (barplot_ev_sum | featurecounts_chart).resolve_scale(color="independent"))
+fig1 = (study_schema & (barplot_ev_sum | featurecounts_chart).resolve_scale(color="independent"))
+# export the chart to svg
+fig1.save(fig_loc / "fig_1.svg", scale_factor=5)
+
+fig1.display()
 ```
 
 ## FIG 2: Cell Type Deconvolution Profiles throughout the Menstrual Cycle
@@ -866,12 +871,15 @@ Combining them all into one.
 
 ```{python}
 # have to resolve the color scale, otherwise the loadings_plt will override the biplot's scale
-(
+fig2 = (
   (peruvian_all | comp_stats_plt) &
   (biplot | loadings_plt).resolve_scale(color="independent", shape="independent")
-).resolve_scale(color="independent", shape="independent").show()
+).resolve_scale(color="independent", shape="independent")
 
-```
+fig2.save(fig_loc / "fig_2.svg", scale_factor=5)
+
+fig2.show()
+  ```
 
 ## FIG 3: Comparison of Biopsy and EV Sampling Methods
 
@@ -884,6 +892,7 @@ Here we focus on the comparison of the paired sample profiles from **both** biop
 ### Dendro-barplot of Fractions {.unnumbered .unlisted}
 
 ```{python}
+
 # Get unique cycle phases
 unique_cycle_phases = ccht_uf_pheno.cyclephase.cat.categories
 
@@ -913,12 +922,12 @@ for i, phase in enumerate(unique_cycle_phases):
     lineage_color_scale=global_color_lineage,
     show_legend=show_legend_for_plot  # Pass the legend visibility argument
   )
-
   phase_plots.append(dendro_barplot_phase)
 
 # Combine the plots horizontally if there are any plots
 combined_plot = alt.hconcat(*phase_plots).resolve_scale(color='shared')
 combined_plot.show()
+
 ```
 
 ### Correlation Heatmap of the Paired Samples {.unnumbered .unlisted}
@@ -1079,7 +1088,11 @@ volcano.interactive()
 :::
 
 ```{python}
-(combined_plot & (final_chart | volcano)).resolve_scale(color="independent")
+fig3 = (combined_plot & (final_chart | volcano)).resolve_scale(color="independent")
+
+fig3.save(fig_loc / "fig_3.svg", scale_factor=5)
+
+fig3.show()
 ```
 
 ## FIG 4: Comparison of Giacomini et al. and our sampling methods
@@ -1363,12 +1376,16 @@ pca_block = (
   (pca_one & pca_two).resolve_scale(color="independent", shape="independent")
   | (pca_three & pca_four).resolve_scale(color="shared", shape="shared")
   ).resolve_scale(color="independent", shape="independent")
-(
+fig4 = (
   (
     dendro_bar &
       (pca_block | dendro_corrplot).resolve_scale(color="independent", shape="independent")
   )
 )
+
+fig4.save(fig_loc / "fig_4.svg", scale_factor=5)
+
+fig4.show()
 ```
 
 ## FIG 5 & Supp. FIG 2: Spatial Projections
@@ -1390,6 +1407,7 @@ sq.pl.spatial_scatter(
   color=[None], crop_coord=crop_coords,
   ncols=2,
   figsize=(6, 3),
+  save=fig_loc / "fig_5a_1.svg"
   )
 ```
 
@@ -1406,6 +1424,7 @@ sq.pl.spatial_scatter(
   crop_coord=crop_coords,
   size=1.3, title="Glandular - Reference scRNA-seq",
   figsize=(6, 3),
+  save=fig_loc / "fig_5a_2.svg"
 )
 sq.pl.spatial_scatter(
   adata_collection[(slide_ids[0], "ev")],
@@ -1414,6 +1433,7 @@ sq.pl.spatial_scatter(
   crop_coord=crop_coords,
   size=1.3, title="Glandular - Generated pUF-EV",
   figsize=(6, 3),
+  save=fig_loc / "fig_5a_3.svg"
 )
 sq.pl.spatial_scatter(
   adata_collection[(slide_ids[0], "bio")],
@@ -1422,6 +1442,7 @@ sq.pl.spatial_scatter(
   crop_coord=crop_coords,
   size=1.3, title="Glandular - Generated Tissue",
   figsize=(6, 3),
+  save=fig_loc / "fig_5a_4.svg"
 )
 ```
 
@@ -1436,7 +1457,7 @@ color_map_dict = celltype_colors
 # Add gray color for all unique lineages
 color_map_dict["Other"] = 'lightgray'
 
-def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 3)):
+def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 3), save=None):
   """Plot UMAP for both tissue and EV datasets for a specific lineage."""
   def mask_celltype_by_lineage(adata, lineage):
     """Mask celltypes not in the current lineage."""
@@ -1507,13 +1528,14 @@ def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 
     fontsize=10,
     frameon=False
   )
-  
-  # plt.tight_layout()
+
+  if save:
+    plt.savefig(save, bbox_inches='tight')
   plt.show()
 
 # Plot for all lineages
 for lineage in unique_lineages_bio:
-  plot_lineage_umap(gen_ccht_bio, gen_ccht_ev, lineage, color_map_dict)
+  plot_lineage_umap(gen_ccht_bio, gen_ccht_ev, lineage, color_map_dict, save=fig_loc / f"fig_5b_{lineage}.svg")
 ```
 
 ### The boxplots of different comparison methods
@@ -1553,7 +1575,8 @@ boxplots = boxplot.facet(
 )
 
 # To display in a Jupyter environment:
-boxplots
+boxplots.save(fig_loc / 'fig_s3.svg', scale_factor=5)  # Save the plot as SVG with high resolution
+boxplots.interactive()
 ```
 
 ### Pearson correlation
@@ -1621,6 +1644,7 @@ corr_plots = chart_layers.facet(
 )
 
 # Display the chart
+corr_plots.save(fig_loc / 'fig_s4.svg', scale_factor=5) # Save the plot as SVG with high resolution
 corr_plots.interactive() # Enable zooming and panning and tooltips and selection and other fun interactivity
 ```
 
@@ -1708,6 +1732,7 @@ comp_handles = [mpatches.Patch(color=comparison_color_map[name], label=name) for
 legend2 = g.fig.legend(handles=comp_handles, title='Generated dataset', bbox_to_anchor=(0.80, 0.93), loc='upper left', borderaxespad=0., frameon=False, alignment='left')
 
 plt.suptitle("Clustered Heatmap of Significant Moran's I (FDR < 0.05)", y=1.02) # Add title
+plt.savefig(fig_loc / "fig_s5c.svg", bbox_inches='tight', dpi=300) # Save the figure
 plt.show() # Display the plot
 ```
 
@@ -1753,6 +1778,7 @@ print(f"Average correlation between tissue replicates: {print_corr:.2f}")
 plt.figure(figsize=(4, 3))
 sns.heatmap(correlation_hut71, annot=True, cmap="viridis", fmt=".2f")
 plt.title("Correlation of Tissue Replicates")
+plt.savefig(fig_loc / "fig_s1e.svg", bbox_inches='tight', dpi=300)
 plt.show()
 ```
 
@@ -1817,7 +1843,8 @@ umap_plot = alt.Chart(umap_df).mark_point(size=60, filled=True).encode(
 Plot the UMAPs below each other for comparison.
 
 ```{python}
-umap_plot_unfilt & umap_plot
+umap_plot_unfilt.save(fig_loc / "fig_s1d.svg", scale_factor=5)  # Save the unfiltered UMAP
+(umap_plot_unfilt & umap_plot).interactive()
 ```
 
 ### Correlation plot of the unfiltered sampleset {.unnumbered .unlisted}
@@ -1856,6 +1883,7 @@ g_unfilt.fig.legend(handles=cyc_handles, title='Cycle Phase', bbox_to_anchor=(.8
 grp_handles = [mpatches.Patch(color=grp_map_unfilt[name], label=name) for name in grp_unfilt_u]
 g_unfilt.fig.legend(handles=grp_handles, title='Sample Group', bbox_to_anchor=(.6, .98), loc='upper right', borderaxespad=0.)
 g_unfilt.fig.suptitle("Correlation Heatmap of Unfiltered Samples (Spearman)", y=1.02)
+plt.savefig(fig_loc / "fig_s1a.svg", bbox_inches='tight', dpi=300)  # Save the plot as SVG with high resolution
 plt.show()
 ```
 
@@ -1936,6 +1964,7 @@ biotype_prop = alt.Chart(df_melted).mark_bar().encode(
   title="Biotype Proportions per Sample (Unfiltered, Top 10 Biotypes)"
 )
 
+biotype_prop.save(fig_loc / "fig_s1c.svg", scale_factor=5)  # Save the plot as SVG with high resolution
 biotype_prop.interactive()
 ```
 
@@ -1991,6 +2020,7 @@ rule = alt.Chart(pd.DataFrame({'percentage': [0.85]})).mark_rule(strokeDash=[5, 
 )
 
 qualimap_plot = (qualimap_plot + rule)
+qualimap_plot.save(fig_loc / "fig_s1b.svg", scale_factor=5)  # Save the plot as SVG with high resolution
 qualimap_plot.interactive()
 ```
 
