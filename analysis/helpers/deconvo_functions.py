@@ -233,8 +233,8 @@ def biplot_fractions(
   ).encode(
     x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
     y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-    color=alt.Color(f"{color_field}:N", title=legend_title, scale=color_scale) if color_field else "black",
-    shape=alt.Shape(f"{style_field}:N") if style_field else "circle"
+    color=alt.Color(f"{color_field}:N").legend(title=legend_title, labelFontSize=12, titleFontSize=13).scale(color_scale) if color_field else "black",
+    shape=alt.Shape(f"{style_field}:N").legend(title="Group", labelFontSize=12, titleFontSize=13) if style_field else "circle"
   )
 
   # --- Create the loadings plot ---
@@ -356,12 +356,12 @@ def peruvian_sands(
   return alt.Chart(fractions_df, view=alt.ViewConfig(strokeWidth=0)).mark_area().encode(
     x=alt.X(
       f'{x_axis_col}:O',
-      axis=alt.Axis(labelAngle=-45, grid=False, domain=False, title=x_title),
+      axis=alt.Axis(labelAngle=-45, grid=False, domain=False, title=x_title, labelFontSize=12),
       sort=x_order
       ),
     y=alt.Y(
       'fractions:Q',
-      axis=alt.Axis(format='%', grid=False, title=lineage_val) 
+      axis=alt.Axis(format='%', grid=False, title=lineage_val, labelFontSize=12) 
         if is_first_dataset_in_row else None
       ),
     color=alt.Color(
@@ -370,7 +370,8 @@ def peruvian_sands(
       legend=alt.Legend(
         title=None,
         values=fractions_df.celltype.unique().tolist(), # Assuming current_row_celltypes is defined in the outer scope or needs to be passed if row-specific
-        columns=legend_col_n
+        columns=legend_col_n,
+        labelFontSize=12
         ) if is_first_dataset_in_row else None
       ),
   ).properties( # Title only for first plot, or dataset name as subtitle

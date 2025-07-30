@@ -559,7 +559,7 @@ peruvian_bio_ev = peruvian_grouped(
   fractions_df=fractions_long,
   grouping_id="group",
   global_color_scale=global_color_ct,
-  dims=(200, 150)
+  dims=(150, 120)
 )
 
 peruvian_bio_ev.show()
@@ -620,7 +620,7 @@ biplot, pca = biplot_fractions(
   color_scale=global_color_phase,
   style_field="group",
   text_limit = 0.05, # controls on how much labels are shown
-  dims = (380, 280)
+  dims = (320, 260)
   )
 biplot.show()
 ```
@@ -661,13 +661,13 @@ loadings_combined = (
 loadings_plt = alt.Chart(loadings_combined).mark_line(
     point=alt.OverlayMarkDef(filled=False, fill="white", size=10)
   ).encode(
-  x=alt.X("Feature:N", sort=None).axis(labelAngle=-45),
-  y=alt.Y("Variance Explained:Q"),
-  color=alt.Color("Group:N")
+  x=alt.X("Feature:N", sort=None).axis(labelAngle=-45, labelFontSize=11),
+  y=alt.Y("Variance Explained:Q").axis(labelFontSize=12),
+  color=alt.Color("Group:N").legend(labelFontSize=12, titleFontSize=13)
 ).properties(
   title='Loadings for Principal Component',
   width=500,
-  height=200
+  height=175
 )
 
 loadings_plt.show()
@@ -691,7 +691,7 @@ def swap_groups(df, to_swap):
 swapper = [("LS", "MS"), ("MS", "ES"), ("ES", "P")]
 comp_order = ["P_vs_ES", "ES_vs_MS", "MS_vs_LS"]
 cycle_order = ["P", "ES", "MS", "LS"]
-plt_width, plt_height = (1000, 130) # Plot dimensions
+plt_width, plt_height = (650, 130) # Plot dimensions
 
 from itertools import product
 
@@ -762,8 +762,8 @@ stat_tmp_groups = pd.DataFrame({
 
 # set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-30, ticks=True, title=None),
-  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=True, title=None)
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-30, ticks=True, title=None, labelFontSize=12),
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=True, title=None, labelFontSize=12)
 )
 
 # the base heatmap
@@ -811,6 +811,8 @@ For the UF samples comparison:
 ```{python}
 stat_comb = stat_comb_prim.query("method == 'uf'")
 stat_comb_celltypes = stat_comb.celltype.drop_duplicates().values
+# move meandiff to percentages
+stat_comb.meandiff = stat_comb.meandiff * 100
 
 # create a dummy dataframes for the custom scale hack
 stat_tmp_groups = pd.DataFrame({
@@ -821,13 +823,14 @@ stat_tmp_groups = pd.DataFrame({
 
 # set up basechart for the Y axis (previously X) and X axis (previously Y)
 base_chart = alt.Chart(stat_comb).encode(
-  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-30, ticks=True, title=None, titleY=25),
-  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=False, ticks=False, title=None)
+  x=alt.X("comparison:N", sort=comp_order).axis(labels=True, labelAngle=-30, ticks=True, title=None, titleY=25, labelFontSize=12),
+  y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(labels=False, ticks=False, title=None, labelFontSize=12)
 )
 
 # the base heatmap
 heatmap = base_chart.mark_rect().encode(
-  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-.2,.2]))
+  color=alt.Color("meandiff:Q").scale(scheme="blueorange", domain=[-20,20]).legend(title="Mean Delta (%)", labelFontSize=12, titleFontSize=13)
+  )
 
 # the grey background for the missing values
 grey_background = base_chart.mark_rect().encode(
@@ -837,7 +840,7 @@ grey_background = base_chart.mark_rect().encode(
 yaxis_color_strip = alt.Chart(stat_comb).mark_rect().encode(
   y=alt.Y("celltype:N", sort=stat_comb_celltypes).axis(title=None),
   x2=alt.value(-10), # set to 0 to not draw it behind the main heatmap (shows small lines)
-  color=alt.Color("lineage:N", scale=global_color_lineage)
+  color=alt.Color("lineage:N", scale=global_color_lineage).legend(title="Lineage", labelFontSize=12, titleFontSize=13)
 )
 
 # the significance testing texty part
@@ -847,15 +850,15 @@ base_text = base_chart.encode(
 # Use dy for vertical positioning of text
 text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="center", dy=-8).encode(
   text=alt.Text("p_stars"),
-  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+  color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
 )
 text_overlay_pval = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")),
-  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+  color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
 )
 text_overlay_diff = base_text.mark_text(fontSize=9, align="center", dy=12).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")),
-  color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
+  color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
 )
 
 comp_stats_uf_plt = (
@@ -1441,7 +1444,7 @@ sq.pl.spatial_scatter(
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Glandular - Generated pUF-EV",
+  size=1.3, title="Glandular - UF-EV pSC",
   figsize=(6, 3),
   save=fig_loc / "fig_5a_3.svg"
 )
@@ -1450,7 +1453,7 @@ sq.pl.spatial_scatter(
   cmap='magma',
   color=cts,
   crop_coord=crop_coords,
-  size=1.3, title="Glandular - Generated Tissue",
+  size=1.3, title="Glandular - Tissue pSC",
   figsize=(6, 3),
   save=fig_loc / "fig_5a_4.svg"
 )
@@ -1507,6 +1510,7 @@ def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 
     legend_loc=None,
     palette=color_map_dict,
     ax=axes[0],
+    frameon=False,
     show=False
   )
   
@@ -1517,6 +1521,7 @@ def plot_lineage_umap(adata_bio, adata_ev, lineage, color_map_dict, figsize=(8, 
     legend_loc="right margin", legend_fontsize=7, legend_fontoutline=2,
     palette=color_map_dict,
     ax=axes[1],
+    frameon=False,
     show=False
   )
   
