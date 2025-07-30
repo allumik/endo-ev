@@ -236,6 +236,11 @@ features_ev = (
     )
   .rename(columns={"Sample": "samplename"})
   # .query("samplename in @frac_pred.index") # don't filter out  here
+  .assign(
+    samplename=lambda x: x.samplename
+      .str.replace("HU10", "HUT10", regex=False)
+      .str.replace(r'(?<=HUT)0+(?=\d)', '', regex=True)
+  )
   .set_index("samplename")
   .rename(index=resampler)
 )
@@ -249,6 +254,11 @@ qualimap_ev = (
     Path(raw_data_folder) / "multiqc/star_rsem/multiqc_data/qualimap_rnaseq_genome_results.txt"
     )
   .rename(columns={"Sample": "samplename"})
+  .assign(
+    samplename=lambda x: x.samplename
+      .str.replace("HU10", "HUT10", regex=False)
+      .str.replace(r'(?<=HUT)0+(?=\d)', '', regex=True)
+  )
   .set_index("samplename")
   .rename(index=resampler)
 )
@@ -1953,11 +1963,11 @@ protein_coding_percentages = df_melted[df_melted['biotype'] == 'protein_coding']
 sample_order = protein_coding_percentages.sort_values(ascending=False).index.tolist()
 
 # --- Plotting logic starts here ---
-biotype_prop = alt.Chart(df_melted).mark_bar().encode(
+biotype_prop = alt.Chart(df_melted).mark_bar(clip=True).encode(
   x=alt.X('samplename:N', title='Sample', sort=sample_order, axis=alt.Axis(labelAngle=-45)), # Swapped from y, added labelAngle
   y=alt.Y('percentage:Q', title='Percentage (%)', scale=alt.Scale(domain=(.8, 1)), axis=alt.Axis(format='%')), # Swapped from x
   color=alt.Color('biotype:N', title='Biotype', sort=top_biotypes, scale=alt.Scale(scheme='tableau10')),
-  order=alt.Order('color_biotype_sort_index:Q') # sort by the color fields
+  order=alt.Order('color_biotype_sort_index:N') # sort by the color fields
 ).properties(
   width=alt.Step(12), # Adjust bar width by setting step, now applied to width
   height=100, # Was width, now height
