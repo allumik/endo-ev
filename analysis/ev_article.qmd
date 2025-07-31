@@ -727,9 +727,9 @@ stat_comb_prim = (
     ),
     meandiff_format=lambda x: "Δ " + x.meandiff.mul(100).round(2).astype(str) + "%",
     padj_format=lambda x: np.select(
-        [x["p-adj"].isna(), x["p-adj"] < 0.01],
-        ["FDR NA", "FDR<0.01"],
-        default="FDR " + x["p-adj"].round(2).astype(str)
+        [x["p-adj"] < 0.01, x["p-adj"] < 0.05, True],
+        ["FDR<0.01", "FDR " + x["p-adj"].round(2).astype(str), "n.s."],
+        default="n.s."
     )
   ).join(general_cells, on="celltype") # Add lineage information
   .assign(comparison_cat=lambda df: pd.Categorical(df['comparison'], categories=comp_order, ordered=True))
@@ -790,17 +790,21 @@ text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="
   color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
 )
 text_overlay_pval = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
-  text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")),
+  text=alt.Text("padj_format:N"),
   color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
 )
 text_overlay_diff = base_text.mark_text(fontSize=9, align="center", dy=12).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")),
   color=alt.condition((alt.datum.meandiff > 0.15) | (alt.datum.meandiff < -0.15), alt.value('white'), alt.value('black'))
 )
+text_overlay_ns = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
+  text=alt.when(~alt.datum.reject).then(alt.Text("padj_format:N")),
+  color=alt.value("grey")
+)
 
 comp_stats_bio_plt = (
   yaxis_color_strip + grey_background + heatmap +
-  text_overlay_stars + text_overlay_diff + text_overlay_pval
+  text_overlay_stars + text_overlay_diff + text_overlay_pval + text_overlay_ns
 ).properties(width=plt_height, height=calculated_heatmap_height) # Use calculated height
 
 comp_stats_bio_plt.show()
@@ -856,6 +860,12 @@ text_overlay_pval = base_text.mark_text(fontSize=9, align="center", dy=0).encode
   text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")),
   color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
 )
+
+text_overlay_ns = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
+  text=alt.when(~alt.datum.reject).then(alt.Text("padj_format:N")),
+  color=alt.value("grey")
+)
+
 text_overlay_diff = base_text.mark_text(fontSize=9, align="center", dy=12).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("meandiff_format:N")),
   color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
@@ -863,7 +873,7 @@ text_overlay_diff = base_text.mark_text(fontSize=9, align="center", dy=12).encod
 
 comp_stats_uf_plt = (
   yaxis_color_strip + grey_background + heatmap +
-  text_overlay_stars + text_overlay_diff + text_overlay_pval
+  text_overlay_stars + text_overlay_diff + text_overlay_pval + text_overlay_ns
 ).properties(width=plt_height, height=calculated_heatmap_height) # Use calculated height
 
 comp_stats_uf_plt.show()
