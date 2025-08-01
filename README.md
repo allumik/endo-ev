@@ -3,7 +3,7 @@
 
 ## Abstract
 
-This repository contains scripts and Quarto documents for the analysis of uterine fluid extracellular vesicles (UF-EV) using generative deep models, specifically the BulkTrajBlend architecture from `omicverse` package.
+This repository contains scripts and Quarto documents for the analysis of uterine fluid extracellular vesicles (UF-EV) using generative deep models, specifically the BulkTrajBlend architecture from [`omicverse`](https://github.com/Starlitnightly/omicverse) package.
 
 
 ## Repository Structure
