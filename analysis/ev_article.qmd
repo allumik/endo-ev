@@ -209,7 +209,9 @@ comb_uf_pheno = comb_uf_pheno.rename(index=resampler)
 comb_batch = comb_batch.rename(columns=resampler)
 comb_raw = comb_raw.rename(columns=resampler)
 frac_pred = frac_pred.rename(index=resampler)
+# frac_pred.to_excel("main_fracs.xlsx")
 frac_comb = frac_comb.rename(index=resampler)
+# frac_comb.to_excel("comb_fracs.xlsx")
 frac_comb_raw = frac_comb_raw.rename(index=resampler)
 ```
 
@@ -856,6 +858,7 @@ text_overlay_stars = base_text.mark_text(fontWeight="bold", fontSize=20, align="
   text=alt.Text("p_stars"),
   color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
 )
+
 text_overlay_pval = base_text.mark_text(fontSize=9, align="center", dy=0).encode(
   text=alt.when(alt.datum.reject).then(alt.Text("padj_format:N")),
   color=alt.condition((alt.datum.meandiff > 15) | (alt.datum.meandiff < -15), alt.value('white'), alt.value('black'))
@@ -1034,7 +1037,7 @@ avg_cyclephase_correlation_matrix = (
   corr_mat.groupby(['cyclephase', 'cyclephase_y'])['correlation']
   .mean()
   .reset_index()
-  .rename(columns={'cyclephase': 'biopsy_cyclephase', 'cyclephase_y': 'uf_cyclephase', 'correlation': 'avg_correlation'})
+  .rename(columns={'cyclephase_y': 'biopsy_cyclephase', 'cyclephase': 'uf_cyclephase', 'correlation': 'avg_correlation'})
 )
 
 # Create the heatmap
