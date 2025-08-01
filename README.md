@@ -16,11 +16,11 @@ Best efforts were made to try to organise things in the following way:
 
 * `./scripts/` - Scripts for processing raw read counts emitted by the nf-core/rnaseq pipeline.
 
-** `ev_raw.r` & `ev_comb.r` are used for preprocessing the read tables for our dataset and combined.
+  * `ev_raw.r` & `ev_comb.r` are used for preprocessing the read tables for our dataset and combined.
 
-** `de_runner.r` & `de_comb_runner.r` are used for running differential analysis (not included in the manuscript).
+  * `de_runner.r` & `de_comb_runner.r` are used for running differential analysis (not included in the manuscript).
 
-** `preproc_sc.qmd` & `preproc_st.qmd` are document versions of the scripts used to run single cell atlas preprocessing, loading in the UF-EV datasets, training models and running inference for deconvolution and project to spatial transcriptomic datasets.
+  * `preproc_sc.qmd` & `preproc_st.qmd` are document versions of the scripts used to run single cell atlas preprocessing, loading in the UF-EV datasets, training models and running inference for deconvolution and project to spatial transcriptomic datasets.
 
 * R and Python scripts to take the read count matrices emitted by nf-core/rnaseq pipeline in `$RAW_DATA_FOLDER` (not included in this repository) and output phenotype files after formatting to `$DATA_FOLDER`.
 
