@@ -199,6 +199,8 @@ def convert_sample_names(sample_names):
 
 # apply the function on the sample dataframes
 resampler = convert_sample_names(ccht_uf_pheno_unfilt.index)
+# print out the resampler dictionary as a dataframe
+# pd.DataFrame.from_dict(resampler, orient='index', columns=['new_name']).to_csv(Path(data_folder) / "resampler.csv")
 ccht_uf_pheno = ccht_uf_pheno.rename(index=resampler)
 ccht_uf_pheno_unfilt = ccht_uf_pheno_unfilt.rename(index=resampler)
 ccht_uf_unfilt_raw = ccht_uf_unfilt_raw.rename(columns=resampler)
@@ -729,8 +731,8 @@ stat_comb_prim = (
     ),
     meandiff_format=lambda x: "Δ " + x.meandiff.mul(100).round(2).astype(str) + "%",
     padj_format=lambda x: np.select(
-        [x["p-adj"] < 0.01, x["p-adj"] < 0.05, True],
-        ["FDR<0.01", "FDR " + x["p-adj"].round(2).astype(str), "n.s."],
+        [x["p-adj"] < 0.01, x["p-adj"] < 0.05, x["anova p-val"] < .05],
+        ["FDR<0.01", "FDR " + x["p-adj"].round(2).astype(str), ""],
         default="n.s."
     )
   ).join(general_cells, on="celltype") # Add lineage information
@@ -903,6 +905,7 @@ fig2 = (
 ).resolve_scale(color="independent", shape="independent")
 
 fig2.save(fig_loc / "fig_2.svg", scale_factor=5)
+# fig2.save(fig_loc / "fig_2.png", ppi=300) # save it in png too bc of font issues
 
 fig2.show()
   ```
