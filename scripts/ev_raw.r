@@ -1,4 +1,4 @@
-#### Script to format the raw data for the analysis
+### Script to format the raw data for the analysis
 # load dependencies
 source("./scripts/load_deps.r")
 
@@ -7,7 +7,7 @@ source("./scripts/load_deps.r")
 ## read in the count matrices and fix naming order
 raw_mat <-
   read_tsv(
-    paste0(raw_data_folder, "/rsem_matrices/rsem.merged.gene_counts_deconvo.tsv")
+    paste0(raw_data_folder, "/rsem.merged.gene_counts_deconvo.tsv")
   ) %>%
   # set NA's as 0's by default and enforce integers (for compact data format)
   mutate(across(where(is.numeric), ~ as.integer(replace_na(.x, 0)))) %>%
@@ -25,9 +25,9 @@ raw_mat <-
   rename_with(~ str_c(.x, "_UF"), matches("HUT009|HUT25|HUT29|HUT32|HUT27"))
 
 ## read in the TPM matrices and fix naming order
-tpm_mat <-
+tpm_mat <
   read_tsv(
-    paste0(raw_data_folder, "/rsem_matrices/rsem.merged.gene_tpm_deconvo.tsv")
+    paste0(raw_data_folder, "/rsem.merged.gene_tpm_deconvo.tsv")
   ) %>%
   # set NA's as 0's by default and enforce integers (for compact data format)
   mutate(across(where(is.numeric), ~ as.integer(replace_na(.x, 0)))) %>%
@@ -44,21 +44,25 @@ tpm_mat <-
   # not added anymore, filtered already before reading in here
   rename_with(~ str_c(.x, "_UF"), matches("HUT009|HUT25|HUT29|HUT32|HUT27"))
 
-
-
 ## read in the metadata and consolidate samplenames
 pheno <-
-  read_tsv(paste0(raw_data_folder, "/mens_phase.tsv")) %>%
-  # apparently some samples in this table are not present in the expression data
+  read_tsv(paste0(raw_data_folder, "/E-MTAB-15505.sdrf.txt")) %>%
+  # rewire samples to fit "samplename", "cyclepase" (pre-post), "group" (uf-biopsy)
+  transmute(
+    "samplename" = .$"Source Name",
+    "cyclephase" = .$"Characteristics[cycle phase]",
+    "group" = .$"Characteristics[sampling site]",
+  ) %>%
+  # rename them back to previous annotation, so that following analysis steps rename again
   mutate(
     # add a group column based on eithe UF or biopsy
     group = ifelse(str_detect(samplename, "UF"), "UF", "biopsy"),
     # rename groups to short group standards in this analysis
     cyclephase = case_when(
-      cyclephase == "Proliferative" ~ "pro",
-      cyclephase == "LH2_3" ~ "pre",
-      cyclephase == "LH7_8" ~ "rec",
-      cyclephase == "LH11_13" ~ "post",
+      cyclephase == "P" ~ "pro",
+      cyclephase == "ES" ~ "pre",
+      cyclephase == "MS" ~ "rec",
+      cyclephase == "LS" ~ "post",
       T ~ cyclephase
     )
   ) %>%
