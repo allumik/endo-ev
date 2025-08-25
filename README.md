@@ -39,7 +39,7 @@ conda env create -f renv.yml -y
 
 2. Then, copy the `.env_template` to `.env` and populate the environment variables to suit your situation. 
 
-3. Download the processed data from E-MTAB-15505 and unzip them to the `$RAW_DATA_FOLDER` folder as defined in your `.env` file. Don't forget to copy `./raw_data/` contents to that folder too.
+3. Download the processed data from E-MTAB-15505 and unzip them to the `$RAW_DATA_FOLDER` folder as defined in your `.env` file. Don't forget to copy `./raw_data/` contents and download [endometriumAtlasV2_cells_with_counts.h5ad](https://cellgeni.cog.sanger.ac.uk/vento/reproductivecellatlas/endometriumAtlasV2_cells_with_counts.h5ad) to that folder too.
 
 4. Next, start running the preprocessing scripts found in `./preproc_scripts/` to quantify reads.
 
