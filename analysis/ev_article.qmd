@@ -173,51 +173,12 @@ general_cells = ( # associate celltypes with the lineage information in the sc_d
 
 Define the sample name converter function that will be used to convert the sample names in the loaded in dataframes. It will take the HUT\d+ prefix for the sample names and assign random numbers to the samples with the prefix format S\d+. The pairings will be conserved, with "UF-EV" and "Tissue" groups being paired together with the same S__ code, and both sampling methods having identifiers on them. 
 
+*edit 25 august* not necessary anymore, converted the samplenames from the beginning now
+
 ```{python}
-def convert_sample_names(sample_names):
-  """
-  Creates a mapping dictionary to convert sample names from 'HUT<number>_...'
-  to 'S<number>_...' format, ensuring paired samples get the same 'S' number.
-  """
-  # Find all unique HUT prefixes (e.g., 'HUT10', 'HUT23') from the sample names
-  hut_prefixes = sorted(list(set(re.findall(r"(HUT\d+)", " ".join(sample_names)))))
-
-  # Create a mapping from HUT prefix to a new S-based prefix
-  s_map = {prefix: f"S{i+1:02d}" for i, prefix in enumerate(hut_prefixes)}
-
-  # Create the final rename dictionary for all sample names
-  rename_dict = {}
-  for name in sample_names:
-    match = re.match(r"(HUT\d+)", name)
-    if match:
-      hut_prefix = match.group(1)
-      if hut_prefix in s_map:
-        # Replace the HUT prefix with the corresponding S prefix and 'biopsy' with 'tissue'
-        new_name = name.replace(hut_prefix, s_map[hut_prefix], 1).replace("biopsy", "tissue")
-        rename_dict[name] = new_name
-  return rename_dict
-
-# apply the function on the sample dataframes
-resampler = convert_sample_names(ccht_uf_pheno_unfilt.index)
-# print out the resampler dictionary as a dataframe
-# pd.DataFrame.from_dict(resampler, orient='index', columns=['new_name']).to_csv(Path(data_folder) / "resampler.csv")
-ccht_uf_pheno = ccht_uf_pheno.rename(index=resampler)
-ccht_uf_pheno_unfilt = ccht_uf_pheno_unfilt.rename(index=resampler)
-ccht_uf_unfilt_raw = (ccht_uf_pheno_unfilt
-  .assign(qc_pass=lambda x: x.index.isin(ccht_uf_pheno.index))
-  .pipe(lambda x: x.to_csv(Path(data_folder) / "main_pheno.csv") or x)
-  .pipe(lambda x: ccht_uf_unfilt_raw.rename(columns=resampler)))
-ccht_uf_unfilt_tpm = ccht_uf_unfilt_tpm.rename(columns=resampler)
-ccht_uf_raw = ccht_uf_raw.rename(columns=resampler)
-ccht_uf_tpm = ccht_uf_tpm.rename(columns=resampler)
-comb_uf_pheno = comb_uf_pheno.rename(index=resampler)
-comb_batch = comb_batch.rename(columns=resampler)
-comb_raw = comb_raw.rename(columns=resampler)
-frac_pred = frac_pred.rename(index=resampler)
-# frac_pred.to_excel("main_fracs.xlsx")
-frac_comb = frac_comb.rename(index=resampler)
-# frac_comb.to_excel("comb_fracs.xlsx")
-frac_comb_raw = frac_comb_raw.rename(index=resampler)
+resampler = pd.read_csv(
+  Path(data_folder) / "resampler.csv", index_col=0, names=["hut", "s"]
+  ).s.to_dict()
 ```
 
 We also load in the different statistical testing tables for CCHT dataset.
@@ -396,25 +357,6 @@ Differential expression (DE) analysis was done in R (v4.3) programming language.
 ```{python}
 # de_ccht_phases = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_phases.feather").set_index("locus")
 # de_ccht_group = pd.read_feather(Path(data_folder) / "filtered" / "de" / "voom_methods.feather").set_index("locus")
-```
-
-## Sample selection and quality control
-
-The following code is an excerpt from the `ev_raw.r` script, describing the main filtering step:
-```{r}
-#| code-fold: false
-#| eval: false
-#| echo: true
-#### FILTER
-# HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
-# HUT10 does not have a paired biopsy sample
-# HUT33, HUT53, HUT17 were excluded due to low intronic proportion
-removals <- c(
-  "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_2", "HUT71_biopsy_3",
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy",
-  "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
-)
-# HUT23_UF was swapped with HUT23_biopsy based on clustering
 ```
 
 ## Deconvolutional model parameters

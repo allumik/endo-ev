@@ -12,37 +12,17 @@ raw_mat <-
   # set NA's as 0's by default and enforce integers (for compact data format)
   mutate(across(where(is.numeric), ~ as.integer(replace_na(.x, 0)))) %>%
   # remove the corresponding transcript ID's and the Undetermined sample
-  select(-"transcript_id(s)") %>%
-  rename_with(
-    ~ .x %>%
-      # fix the sample names
-      str_replace("HU10", "HUT10") %>%
-      # Remove leading zeros after "HUT" and before a digit
-      str_remove("(?<=\\HUT)[0]+(?=\\d)")
-  ) %>%
-  # fix missing sample names from the added samples
-  # not added anymore, filtered already before reading in here
-  rename_with(~ str_c(.x, "_UF"), matches("HUT009|HUT25|HUT29|HUT32|HUT27"))
+  select(-"transcript_id(s)")
 
 ## read in the TPM matrices and fix naming order
-tpm_mat <
+tpm_mat <-
   read_tsv(
     paste0(raw_data_folder, "/rsem.merged.gene_tpm_deconvo.tsv")
   ) %>%
   # set NA's as 0's by default and enforce integers (for compact data format)
   mutate(across(where(is.numeric), ~ as.integer(replace_na(.x, 0)))) %>%
   # remove the corresponding transcript ID's and the Undetermined sample
-  select(-"transcript_id(s)") %>%
-  rename_with(
-    ~ .x %>%
-      # fix the sample names
-      str_replace("HU10", "HUT10") %>%
-      # Remove leading zeros after "HUT" and before a digit
-      str_remove("(?<=\\HUT)[0]+(?=\\d)")
-  ) %>%
-  # fix missing sample names from the added samples
-  # not added anymore, filtered already before reading in here
-  rename_with(~ str_c(.x, "_UF"), matches("HUT009|HUT25|HUT29|HUT32|HUT27"))
+  select(-"transcript_id(s)")
 
 ## read in the metadata and consolidate samplenames
 pheno <-
@@ -55,7 +35,7 @@ pheno <-
   ) %>%
   # rename them back to previous annotation, so that following analysis steps rename again
   mutate(
-    # add a group column based on eithe UF or biopsy
+    # add a group column based on eithe UF or tissue
     group = ifelse(str_detect(samplename, "UF"), "UF", "biopsy"),
     # rename groups to short group standards in this analysis
     cyclephase = case_when(
@@ -70,38 +50,25 @@ pheno <-
 
 
 #### FILTER
-# HUT10, HUT1, HUT71, HUT53, HUT17 were excluded due to poor clustering
-# HUT10 does not have a paired biopsy sample
-# HUT33, HUT53, HUT17 were excluded due to low biotype proportion
-# HUT23_UF was swapped with HUT23_biopsy based on clustering
+# S01, S22, S19, S04 were excluded due to poor clustering
+# S22, S19, S04 were excluded due to low biotype proportion
+# S07_UF was swapped with S07_tissue based on clustering, but removed in the end
 removals <- c(
-  "HUT71_UF", "HUT71_biopsy", "HUT71_biopsy_1", "HUT71_biopsy_2", "HUT71_biopsy_3",
-  "HUT10_UF", "HUT1_UF", "HUT1_biopsy", "HUT23_biopsy", "HUT23_UF",
-  "HUT53_UF", "HUT53_biopsy", "HUT17_UF", "HUT17_biopsy"
+  "S22_UF", "S22_tissue", "S22_tissue_1", "S22_tissue_2", "S22_tissue_3",
+  "S01_UF", "S01_tissue", "S07_tissue", "S07_UF",
+  "S19_UF", "S19_tissue", "S04_UF", "S04_tissue"
 )
 
 # switch and filter some samples
 raw_mat_unfilt <- raw_mat
 raw_mat <-
   raw_mat %>%
-#   rename(
-#     ## this takes too much time to figure out how to switch programmatically
-#     ## just switch manually
-#     HUT23_biopsy = HUT23_UF,
-#     HUT23_UF = HUT23_biopsy
-#   ) %>%
   select(-removals[removals %in% colnames(raw_mat)])
 
 # switch and filter some samples
 tpm_mat_unfilt <- tpm_mat
 tpm_mat <-
   tpm_mat %>%
-#   rename(
-#     ## this takes too much time to figure out how to switch programmatically
-#     ## just switch manually
-#     HUT23_biopsy = HUT23_UF,
-#     HUT23_UF = HUT23_biopsy
-#   ) %>%
   select(-removals[removals %in% colnames(tpm_mat)])
 
 

@@ -7,7 +7,10 @@ source("./scripts/de_functions.r")
 ## And the data too
 data_subfolder <- paste0(data_folder, "/filtered/")
 raw_mat <- read_feather(paste0(data_subfolder, "counts_raw.feather"))
-pheno <- read_tsv(paste0(data_subfolder, "phenotype.tsv"))
+pheno <- 
+  read_tsv(paste0(data_subfolder, "phenotype.tsv")) %>% 
+  # rename the group to tissue for compatilibity 
+  mutate(group = ifelse(str_detect(samplename, "UF"), "UF", "tissue"))
 annot <- read_csv(paste0(raw_data_folder, "/annot_table.csv"))
 
 ## Diff analysis comparisons within `group`
@@ -86,7 +89,7 @@ samples_in_group <- lapply(
 )
 
 comps <- list(
-  "UF_vs_biopsy" = c("UF", "biopsy")
+  "UF_vs_biopsy" = c("UF", "tissue")
 )
 
 deseq_res_group <- lapply(
@@ -124,7 +127,11 @@ voom_res_group <- lapply(
 # write out the DE result
 de_folder <- paste0(data_subfolder, "/de/")
 if (!dir.exists(de_folder)) dir.create(de_folder)
-deseq_res_phase %>% write_feather(paste0(de_folder, "deseq_phases.feather"))
-voom_res_phase %>% write_feather(paste0(de_folder, "voom_phases.feather"))
+deseq_res_phase %>% 
+  mutate(methods = ifelse(methods == "tissue", "biopsy", methods)) %>%
+  write_feather(paste0(de_folder, "deseq_phases.feather"))
+voom_res_phase %>% 
+  mutate(methods = ifelse(methods == "tissue", "biopsy", methods)) %>%
+  write_feather(paste0(de_folder, "voom_phases.feather"))
 deseq_res_group %>% write_feather(paste0(de_folder, "deseq_methods.feather"))
 voom_res_group %>% write_feather(paste0(de_folder, "voom_methods.feather"))

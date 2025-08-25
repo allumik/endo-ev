@@ -90,7 +90,6 @@ comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_a
 comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather").set_index("external_gene_name").iloc[:-1]
 comb_uf = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather").set_index("gene_id").iloc[:-1]
 ## filter out some samples
-# terminator = ["HUT26_UF", "HUT26_biopsy"]
 terminator = []
 comb_all = comb_all.drop(columns=terminator)
 comb_all_raw = comb_all_raw.drop(columns=terminator)
@@ -131,7 +130,6 @@ ccht_uf_pheno = (
       pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
     )
 )
-# terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"]
 terminator = []
 ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator")
 ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
@@ -1657,7 +1655,7 @@ First lets perform statistical testing on the differences of all cell proportion
 pheno_tmp = (
   ccht_uf_pheno
   .loc[frac_ccht_mat.index]
-  .assign(HUT=lambda x: x.index.str.extract(r"(HUT\d+)", expand=False))
+  .assign(HUT=lambda x: x.index.str.extract(r"(^S\d+)", expand=False))
   .filter(["HUT", "cyclephase"])
 )
 
@@ -1675,7 +1673,7 @@ def calculate_stats(group):
 # select out samples that have duplicated methods and correlate them
 results_df = (
   frac_ccht_mat
-  .groupby(lambda x: re.match(r"(HUT\d+)", x).group(1) )
+  .groupby(lambda x: re.match(r"(^S\d+)", x).group(1) )
   .apply(calculate_stats)
   .join(pheno_tmp.drop_duplicates().set_index("HUT"), how="left")
   .reset_index(names="HUT")
@@ -1703,7 +1701,7 @@ corr_mat = (
   .T
   .corr(method="spearman")
   # select out only cols with UF in columns and biopsy in rows
-  .filter(regex="UF", axis=0).filter(regex="biopsy", axis=1)
+  .filter(regex="UF", axis=0).filter(regex="tissue", axis=1)
   .iloc[::-1]
 )
 
@@ -1750,7 +1748,7 @@ Finally, the heatmap of the difference of proportions per paired sample per cell
 # calculate absolute diff per celltype per paired sample
 results_df = (
   prepped_mat
-  .groupby(lambda x: re.match(r"(HUT\d+)", x).group(1))
+  .groupby(lambda x: re.match(r"(^S\d+)", x).group(1))
   .apply(lambda x: x.iloc[0] - x.iloc[1]) # [0] if UF, [1] is biopsy
   # reorder the mat per cyclephase grouping
   .reindex(pheno_tmp.drop_duplicates().sort_values(["cyclephase"]).HUT)

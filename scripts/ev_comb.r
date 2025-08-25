@@ -48,7 +48,7 @@ ev_comb_pheno <-
 comb_mat <-
   list("HUT" = hut_mat, "Vigano" = ev_comb) %>%
   reduce(inner_join, by = "external_gene_name") %>%
-  select(!ends_with("biopsy_1")) # !ends_with("biopsy") & 
+  select(!ends_with("tissue_1")) # !ends_with("biopsy") & 
 
 # harmonise the pheno file and add batch parameter
 # grouping says the sample type (EV/Biopsy)
@@ -79,7 +79,7 @@ comb_batch_all <-
 # apply batch normalisation on the dataframes - only UF
 comb_batch_uf <-
   comb_mat %>%
-  select(!ends_with("biopsy")) %>% # select only UF samples
+  select(!ends_with("tissue")) %>% # select only UF samples
   column_to_rownames("external_gene_name") %>%
   as.matrix %>%
   sva::ComBat_seq(
