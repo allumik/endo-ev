@@ -14,6 +14,8 @@ Best efforts were made to try to organise things in the following way:
 
 * `./analysis/` - RMarkdown and Quarto documents to generate interactive analysis reports. The main analysis workflow used in the manuscript is described in the `ev_article.qmd`, while other documents in that folder were used for explorative data analysis and to run statistical testing.
 
+* `./raw_data/` - Some extra raw data files used as input during the analysis; the contents of the folders should be in `$RAW_DATA_FOLDER`.
+
 * `./scripts/` - Scripts for processing raw read counts emitted by the nf-core/rnaseq pipeline.
 
   * `ev_raw.r` & `ev_comb.r` are used for preprocessing the read tables for our dataset and combined.
@@ -27,7 +29,7 @@ Best efforts were made to try to organise things in the following way:
 
 ## Setup for Reproducing the Analysis
 
-1. Using a `conda`-like environment manager, recreate the analysis environment with
+1. Using a `conda`-like environment manager, recreate the analysis environment with:
 
 ```
 conda env create -f env.yml -y
@@ -37,7 +39,7 @@ conda env create -f renv.yml -y
 
 2. Then, copy the `.env_template` to `.env` and populate the environment variables to suit your situation. 
 
-3. Download the processed data from E-MTAB-15505 and unzip them in the folder specified by `$RAW_DATA_FOLDER` in your `.env` file.
+3. Download the processed data from E-MTAB-15505 and unzip them to the `$RAW_DATA_FOLDER` folder as defined in your `.env` file. Don't forget to copy `./raw_data/` contents to that folder too.
 
 4. Next, start running the preprocessing scripts found in `./preproc_scripts/` to quantify reads.
 
@@ -46,6 +48,4 @@ conda env create -f renv.yml -y
 
 Alternatively, you can use the scripts in the `./preproc_scripts/` folder to run the nf-core/rnaseq pipeline on the raw data.
 
-
-## Citations
 

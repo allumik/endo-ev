@@ -177,7 +177,7 @@ Define the sample name converter function that will be used to convert the sampl
 
 ```{python}
 resampler = pd.read_csv(
-  Path(data_folder) / "resampler.csv", index_col=0, names=["hut", "s"]
+  Path(raw_data_folder) / "resampler.csv", index_col=0, names=["hut", "s"]
   ).s.to_dict()
 ```
 
