@@ -2022,14 +2022,6 @@ supp_1.interactive()
 fractions_file = fractions_folder / "clin_fracs.tsv"
 frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
 
-general_cells = (
-  sc_dat.obs
-  .loc[:, ["lineage", "celltype"]]
-  .drop_duplicates("celltype")
-  .set_index("celltype", drop=True)
-  .reindex(frac_pred.columns.values)
-)
-
 ```
 
 As the proportions still add up to one, we can also generate a stacked barplot for the cell proportions per cell type over all the samples.
@@ -2093,58 +2085,6 @@ biplot_fractions(
 )[0]
 
 ```
-
-Or **by major cell types**:
-
-::: {.panel-tabset}
-
-```{python}
-
-the_code_block = """
-focus_celltypes = general_cells.query("lineage == @general_ct").index
-
-frac_pred_gen = pd.DataFrame(
-  # frac_pred.filter(focus_celltypes, axis=1),
-  normalize(frac_pred.filter(focus_celltypes, axis=1), axis=1, norm="l1"),
-  columns=frac_pred.filter(focus_celltypes, axis=1).columns,
-  index=frac_pred.index
-)
-
-dendro_barplot(
-  frac_pred_gen, 
-  clin_uf_pheno, 
-  legend_class_ncol=2,
-  phenotype_df_col="implantation"
-)
-
-biplot_fractions(
-  frac_pred_gen, clin_uf_pheno, 
-  legend_title="Implantation", 
-  color_field="implantation" 
-)[0]
-"""
-
-# generate a temporary file and write the logic there
-tmp_section_f = "_ev_corr_props_clin.qmd"
-with open(tmp_section_f, 'w') as section_f:
-  for general_ct in set(general_cells.lineage):
-    the_lines = [
-      # header
-      "### " + general_ct + " {.unnumbered .unlisted}\n\n",
-      # some description text
-      "The proportions of the cell types within the general celltypes.\n\n",
-      # start of block
-      "```{python}\n",
-      f"general_ct = '{general_ct}'\n",
-      the_code_block,
-      # end of block
-      "```\n\n"
-      ]
-    section_f.writelines(the_lines)
-
-```
-
-{{< include _ev_corr_props_clin.qmd >}}
 
 :::
 
