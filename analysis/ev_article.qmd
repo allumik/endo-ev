@@ -2014,3 +2014,157 @@ supp_1 = (
 
 supp_1.interactive()
 ```
+
+## Supp X. Clinical samples
+
+```{python}
+
+fractions_file = fractions_folder / "clin_fracs.tsv"
+frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
+
+general_cells = (
+  sc_dat.obs
+  .loc[:, ["lineage", "celltype"]]
+  .drop_duplicates("celltype")
+  .set_index("celltype", drop=True)
+  .reindex(frac_pred.columns.values)
+)
+
+```
+
+As the proportions still add up to one, we can also generate a stacked barplot for the cell proportions per cell type over all the samples.
+
+```{python}
+
+dendro_barplot(
+  frac_pred, 
+  clin_uf_pheno,
+  legend_phase_bbox=(1.05, .1),
+  legend_class_bbox=(1.05, .1),
+  legend_phase_ncol=clin_uf_pheno.implantation.unique().size,
+  legend_class_ncol=3,
+  phenotype_df_col="implantation"
+  )
+
+```
+
+The overall changes throughout the clinical statuses averaged over all the samples from the same clinical group.
+
+```{python}
+
+fig1 = peruvian_sands(
+  fractions_df=peruvian_transform(
+      fractions=frac_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==1"), grouping_ids=["implantation"]
+    ), 
+  x_axis_col="implantation",
+  x_title="Implantation?",
+  grouping_val="Embryo Transfers: 1",
+  dims=(200, 250),
+  legend_col_n=2
+)
+
+fig2 = peruvian_sands(
+  fractions_df=peruvian_transform(
+      fractions=frac_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==2"), grouping_ids=["implantation"]
+    ), 
+  x_axis_col="implantation",
+  x_title="Implantation?",
+  grouping_val="Embryo Transfers: 2",
+  dims=(200, 250),
+  legend_col_n=2
+)
+
+alt.hconcat(fig1, fig2, spacing=0).resolve_scale( # Adjust vertical spacing as needed
+    x='shared',
+    y='shared',
+    color='shared' # Keep color scale independent - legends are now handled manually
+  ).show()
+
+```
+
+Apply PCA on the proportions.
+
+```{python}
+
+biplot_fractions(
+  frac_pred, clin_uf_pheno, 
+  legend_title="Implantation", 
+  color_field="implantation"
+)[0]
+
+```
+
+Or **by major cell types**:
+
+::: {.panel-tabset}
+
+```{python}
+
+the_code_block = """
+focus_celltypes = general_cells.query("lineage == @general_ct").index
+
+frac_pred_gen = pd.DataFrame(
+  # frac_pred.filter(focus_celltypes, axis=1),
+  normalize(frac_pred.filter(focus_celltypes, axis=1), axis=1, norm="l1"),
+  columns=frac_pred.filter(focus_celltypes, axis=1).columns,
+  index=frac_pred.index
+)
+
+dendro_barplot(
+  frac_pred_gen, 
+  clin_uf_pheno, 
+  legend_class_ncol=2,
+  phenotype_df_col="implantation"
+)
+
+biplot_fractions(
+  frac_pred_gen, clin_uf_pheno, 
+  legend_title="Implantation", 
+  color_field="implantation" 
+)[0]
+"""
+
+# generate a temporary file and write the logic there
+tmp_section_f = "_ev_corr_props_clin.qmd"
+with open(tmp_section_f, 'w') as section_f:
+  for general_ct in set(general_cells.lineage):
+    the_lines = [
+      # header
+      "### " + general_ct + " {.unnumbered .unlisted}\n\n",
+      # some description text
+      "The proportions of the cell types within the general celltypes.\n\n",
+      # start of block
+      "```{python}\n",
+      f"general_ct = '{general_ct}'\n",
+      the_code_block,
+      # end of block
+      "```\n\n"
+      ]
+    section_f.writelines(the_lines)
+
+```
+
+{{< include _ev_corr_props_clin.qmd >}}
+
+:::
+
+Perform t-test for the pairwise differences of RIF and CTRL samples for each cell type.
+
+* How strong is the trend of changing values throughout the cycle phases? -> rank correlation throughout the cycle phases in temporal order.
+
+```{python}
+
+frac_long = convert_to_long(frac_pred, clin_uf_pheno).drop(columns=["n_transfer_embryo"])
+
+# write the t-testing function
+ttest_table = pd.DataFrame({
+  celltype: {
+    "z_stat": ttest_ind(dat[dat["implantation"]]["ratio"], dat[dat["implantation"]==False]["ratio"]).statistic,
+    "p-val": ttest_ind(dat[dat["implantation"]]["ratio"], dat[dat["implantation"]==False]["ratio"]).pvalue,
+  }
+  for celltype, dat in frac_long.groupby("celltype")
+}).T
+
+ttest_table.to_excel(fractions_folder / "clin_test.xlsx", sheet_name="clin")
+
+```

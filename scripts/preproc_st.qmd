@@ -1,0 +1,268 @@
+---
+title: "Preprocess and project the spatial transcriptomics data"
+format:
+  html:
+    embed-resources: true
+    self-contained-math: true
+jupyter: python3
+---
+
+## Setup and load some preliminaries
+```{python}
+import pandas as pd
+import scanpy as sc
+import omicverse as ov
+import anndata as an
+import numpy as np
+from torch import OutOfMemoryError
+from torch.cuda import empty_cache
+from pathlib import Path
+from os import getenv
+from dotenv import load_dotenv
+
+## set the random seed for torch and others
+RANDO_SEED = 96
+import torch
+torch.manual_seed(RANDO_SEED)
+import random
+random.seed(RANDO_SEED)
+np.random.seed(RANDO_SEED)
+
+
+## load the environment variables from the .env file
+load_dotenv()
+if getenv("DATA_FOLDER") is None:
+  load_dotenv(Path.cwd() / ".env")
+
+anndata_folder = getenv("ANNDATA_FOLDER")
+atlas_folder = getenv("ATLAS_FOLDER")
+data_folder = getenv("DATA_FOLDER")
+st_folder = getenv("ST_FOLDER")
+model_folder = Path(data_folder).expanduser() / "saved_models"
+raw_data_folder = getenv("RAW_DATA_FOLDER")
+```
+
+## Load in the preprocessed scRNA-seq dataset in `preproc_sc.py`
+```{python}
+## load in the modified HECA atlas
+snapshot_an_loc = Path(data_folder).expanduser() / "sc_deconv_snapshot.h5ad"
+sc_dat = an.read_h5ad(snapshot_an_loc)
+```
+
+## Load in the UF and biopsy bulk datasets
+```{python}
+## load in the EV data
+comb_all = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_batch.feather").set_index("gene_id").iloc[:-1]
+comb_all_raw = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_all_raw.feather").set_index("external_gene_name").iloc[:-1]
+comb_uf = pd.read_feather(Path(data_folder).expanduser() / "combined" / "comb_uf_batch.feather").set_index("gene_id").iloc[:-1]
+## filter out some samples
+# terminator = ["HUT26_UF", "HUT26_biopsy"]
+terminator = []
+comb_all = comb_all.drop(columns=terminator)
+comb_all_raw = comb_all_raw.drop(columns=terminator)
+comb_all_pheno = (
+  pd.read_table(Path(data_folder).expanduser() / "combined" / "comb_all_pheno.tsv")
+  .set_index("samplename")
+  .query("samplename not in @terminator")
+  .assign(dataset = lambda x: np.where(x.dataset == "HUT", x.dataset, "Vigano"))
+)
+comb_uf_pheno = comb_all_pheno.query("cyclephase in ['rec', 'pre'] and group == 'UF'")
+comb_uf = comb_uf[comb_uf.columns.intersection(comb_uf_pheno.index)]
+
+
+## load in the EV CCHT only data
+ccht_uf_raw = pd.read_feather(Path(data_folder).expanduser() / "filtered" / "annot_raw.feather").set_index("gene_id").iloc[:-1]
+ccht_uf_pheno = (
+  pd.read_table(Path(data_folder).expanduser() / "filtered" / "phenotype.tsv")
+  .set_index("samplename")
+  .query("samplename in @ccht_uf_raw.columns")
+  .assign(
+    cyclephase=lambda x: 
+      pd.Categorical(x.cyclephase, categories=["pro", "pre", "rec", "post"], ordered=True)
+    )
+)
+# terminator = ["HUT26_UF", "HUT17_UF", "HUT53_UF", "HUT71_UF"]
+ccht_uf_pheno = ccht_uf_pheno.query("samplename not in @terminator")
+ccht_uf_raw = ccht_uf_raw.drop(columns=terminator)
+```
+
+## Parameters for the celltype models
+```{python}
+model_params = {
+  "celltype_key": "celltype",
+  "top_marker_num": 250, # reduce it from the default parameter of 500
+  # get a half of all the single ~~ladies~~ cells to reduce the size of the input dataset
+  "max_single_cells": round(len(sc_dat.obs.index) / 8),
+  "ratio_num": 1,
+  "gpu": 0
+}
+
+frac_params = {
+  "batch_size": 512,
+  "epochs": 1000, # looking at loss plot then 500 seems to be already enough
+  "method": "tape",
+  "scaler": "ss", # seems to harmonise distributions better
+  "mode": "high-resolution"
+}
+
+# for the projection part
+vae_params = {
+  "batch_size": 512,
+  "hidden_size": 256,
+  "epoch_num": 100 # looking at loss plot then 500 seems to be already enough
+}
+```
+
+## Run the Projection models
+```{python}
+## First for the EV samples
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
+model_obj = ov.bulk2single.Bulk2Single(
+  bulk_data=ccht_uf_raw[ccht_uf_pheno.query("group=='UF'").index],
+  single_data=sc_dat.to_memory(),
+  **model_params
+)
+# you have to run this to set the model_obj.cell_target_sum
+# and not run the single_preprocess_lazy() as it seems to override cell_num attribute and does needless normalisation
+_ = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED)
+model_obj.bulk_preprocess_lazy()
+model_obj.train(
+  vae_save_dir=Path(model_folder).expanduser() / "pseudosc_model",
+  vae_save_name="pseudosc_ev",
+  generate_save_dir=Path(model_folder).expanduser() / "pseudosc_gen",
+  generate_save_name="pseudosc_ev_gen",
+  **vae_params
+  )
+gen_ccht_ev = model_obj.generate()
+gen_ccht_ev.obs = (
+  gen_ccht_ev.obs
+  .join(
+    sc_dat.obs[["celltype", "lineage"]].drop_duplicates(keep="first").set_index("celltype"),
+    on="celltype"
+  )
+  # and now fix the join bc pandas does not seem to understand what "left join" means
+  .reset_index(names="barcodes")
+  .drop_duplicates(subset="barcodes", keep="first")
+).set_index("barcodes")
+
+gen_ccht_ev = ov.pp.preprocess(gen_ccht_ev, mode="shiftlog|pearson", n_HVGs=2000)
+ov.pp.scale(gen_ccht_ev)
+ov.pp.pca(gen_ccht_ev, layer='scaled', n_pcs=50)
+gen_ccht_ev.obsm['X_pca']=gen_ccht_ev.obsm['scaled|original|X_pca']
+ov.pp.neighbors(gen_ccht_ev, n_neighbors=15, n_pcs=50, use_rep='scaled|original|X_pca')
+ov.pp.umap(gen_ccht_ev)
+
+gen_ccht_ev.write(gen_sc_file)
+# gen_ccht_ev = an.read_h5ad(gen_sc_file, backed="r")
+del model_obj
+empty_cache()
+
+## Second for the Biopsy samples
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
+model_obj = ov.bulk2single.Bulk2Single(
+  bulk_data=ccht_uf_raw[ccht_uf_pheno.query("group=='biopsy'").index],
+  single_data=sc_dat.to_memory(),
+  **model_params
+)
+_ = model_obj.predicted_fraction(**frac_params, seed=RANDO_SEED) # you have to run this to set the model_obj.cell_target_sum
+model_obj.bulk_preprocess_lazy()
+model_obj.train(
+  vae_save_dir=Path(model_folder).expanduser() / "pseudosc_model",
+  vae_save_name="pseudosc_bio",
+  generate_save_dir=Path(model_folder).expanduser() / "pseudosc_gen",
+  generate_save_name="pseudosc_bio_gen",
+  **vae_params
+  )
+gen_ccht_bio = model_obj.generate()
+gen_ccht_bio.obs = (
+  gen_ccht_bio.obs
+  .join(
+    sc_dat.obs[["celltype", "lineage"]].drop_duplicates(keep="first").set_index("celltype"),
+    on="celltype"
+  )
+  # and now fix the join bc pandas does not seem to understand what "left join" means
+  .reset_index(names="barcodes")
+  .drop_duplicates(subset="barcodes", keep="first")
+).set_index("barcodes")
+
+gen_ccht_bio = ov.pp.preprocess(gen_ccht_bio, mode="shiftlog|pearson", n_HVGs=2000)
+ov.pp.scale(gen_ccht_bio)
+ov.pp.pca(gen_ccht_bio, layer='scaled', n_pcs=50)
+gen_ccht_bio.obsm['X_pca'] = gen_ccht_bio.obsm['scaled|original|X_pca']
+ov.pp.neighbors(gen_ccht_bio, n_neighbors=15, n_pcs=50, use_rep='scaled|original|X_pca')
+ov.pp.umap(gen_ccht_bio)
+
+gen_ccht_bio.write(gen_sc_file)
+# gen_ccht_bio = an.read_h5ad(gen_sc_file, backed="r")
+del model_obj
+empty_cache()
+```
+
+## Preprocess and project on the spatial slides
+```{python}
+slides_path = Path(st_folder).expanduser()
+slide_ids = []
+for vis_fold in slides_path.iterdir():
+  if vis_fold.is_dir():
+    slide_id = vis_fold.stem
+    # Use this line to select out only single samples if needed
+    # if not slide_id == "152811": continue
+    print("Working on slide " + str(slide_id))
+    vis_dat = sc.read_visium(path=vis_fold) # for vento data
+    # vis_dat = sc.read_visium(path=vis_fold / "outs") # for inhouse data
+    vis_dat.var_names_make_unique()
+    vis_dat.var["mt"] = vis_dat.var_names.str.startswith("MT-")
+    sc.pp.calculate_qc_metrics(vis_dat, qc_vars=["mt"], inplace=True)
+
+    vis_dat = vis_dat[:, vis_dat.var['total_counts'] > 100]
+    vis_dat = ov.pp.preprocess(vis_dat, mode='shiftlog|pearson', n_HVGs=3000, target_sum=1e4)
+    ## new recommended preproc - does not work
+    # vis_dat = ov.space.svg(vis_dat, mode="prost", n_svgs=3000, target_sum=1e4, platform="visium")
+    vis_dat.raw = vis_dat
+    vis_dat = vis_dat[:, vis_dat.var.highly_variable_features]
+    slide_ids.append(slide_id)
+
+    vis_dat.write(Path(anndata_folder) / f"st_slide_{slide_id}.h5ad")
+
+    # write out the ev projection
+    gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{slide_id}_ev.h5ad"
+    model_obj = ov.space.Tangram(gen_ccht_ev.to_memory(), vis_dat, clusters="celltype")
+    try:
+      empty_cache()
+      model_obj.train(mode="cells", num_epochs=500, device="cuda", random_state=RANDO_SEED)
+    except OutOfMemoryError as e:
+      print(f"CUDA ran out of memory: {e}")
+      print("Falling back to CPU training.")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu", random_state=RANDO_SEED)
+    vis_dat_proj = model_obj.cell2location()
+    vis_dat_proj.write(gen_st_file)
+    del model_obj
+
+    # write out the biopsy projection
+    gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{slide_id}_bio.h5ad"
+    model_obj = ov.space.Tangram(gen_ccht_bio.to_memory(), vis_dat, clusters="celltype")
+    try:
+      empty_cache()
+      model_obj.train(mode="cells", num_epochs=500, device="cuda", random_state=RANDO_SEED)
+    except OutOfMemoryError as e:
+      print(f"CUDA ran out of memory: {e}")
+      print("Falling back to CPU training.")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu", random_state=RANDO_SEED)
+    vis_dat_proj = model_obj.cell2location()
+    vis_dat_proj.write(gen_st_file)
+    del model_obj
+
+    # write out the scRNAseq projectino as reference
+    gen_st_file = Path(anndata_folder).expanduser() / f"c2l_{slide_id}_ref.h5ad"
+    model_obj = ov.space.Tangram(sc_dat.to_memory(), vis_dat, clusters="celltype")
+    try:
+      empty_cache()
+      model_obj.train(mode="cells", num_epochs=500, device="cuda", random_state=RANDO_SEED)
+    except OutOfMemoryError as e:
+      print(f"CUDA ran out of memory: {e}")
+      print("Falling back to CPU training.")
+      model_obj.train(mode="cells", num_epochs=500, device="cpu", random_state=RANDO_SEED)
+    vis_dat_proj = model_obj.cell2location()
+    vis_dat_proj.write(gen_st_file)
+    del model_obj
+```

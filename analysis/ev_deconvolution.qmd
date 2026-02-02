@@ -736,7 +736,6 @@ frac_pred_gen = pd.DataFrame(
   columns=frac_pred.filter(focus_celltypes, axis=1).columns,
   index=frac_pred.index
 )
-
 dendro_barplot(frac_pred_gen, ccht_uf_pheno, legend_class_ncol=2)
 peruvian_sands(
   fractions_df=peruvian_transform(

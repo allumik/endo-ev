@@ -1,0 +1,85 @@
+[workspace]
+name = "endo-ev"
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[dependencies]
+# Global dependencies (empty or minimal system-level libs only)
+
+[feature.python-core.dependencies]
+python = ">=3.9"
+pandas = "*"
+python-dotenv = "*"
+scikit-learn = "*"
+ipykernel = "*"
+ipywidgets = ">=7.6"
+ipython = "<=8"
+h5py = "*"
+scipy = "*"
+# Bio core
+anndata = "*"
+scanpy = "*"
+
+[feature.analysis.dependencies]
+jupyter-cache = "*"
+seaborn = "*"
+altair = "*"
+itables = "*"
+openpyxl = "*"
+vl-convert-python = "*"
+nbformat = "*"
+nbclient = "*"
+
+[feature.analysis.pypi-dependencies]
+matplotlib = "*"
+
+[feature.analysis.target.linux-64.dependencies]
+squidpy = ">=1.6.0"
+
+[feature.proc]
+# Explicitly forcing pytorch to have highest priority, then nvidia
+channels = [
+  { channel = "pytorch", priority = 10 },
+  { channel = "nvidia", priority = 5 }
+]
+
+[feature.proc.dependencies]
+scrublet = "*"
+omicverse = "==1.6.7"
+# GPU stack
+pytorch = "*"
+torchvision = "*"
+torchaudio = "*"
+pytorch-cuda = "12.1.*"
+
+[feature.proc.pypi-dependencies]
+tangram-sc = "*"
+
+[feature.r-analysis]
+channels = ["conda-forge", "bioconda", "r"]
+
+[feature.r-analysis.dependencies]
+r-base = ">=4.1"
+r-tidyverse = "*"
+r-tidymodels = "*"
+r-dotenv = "*"
+r-languageserver = "*"
+r-rmarkdown = "*"
+r-stringr = "*"
+r-foreach = "*"
+r-doparallel = "*"
+r-readxl = "*"
+r-feather = "*"
+r-glue = "*"
+r-biomartr = "*"
+r-statmod = "*"
+bioconductor-rtracklayer = "*"
+bioconductor-sva = "*"
+bioconductor-edger = "*"
+bioconductor-deseq2 = "*"
+bioconductor-limma = "*"
+
+[environments]
+analysis = ["python-core", "analysis"]
+proc = ["python-core", "proc"]
+r-analysis = ["r-analysis"]

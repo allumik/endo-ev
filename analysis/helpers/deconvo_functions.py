@@ -233,8 +233,8 @@ def biplot_fractions(
   ).encode(
     x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
     y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-    color=alt.Color(f"{color_field}:N").legend(title=legend_title, labelFontSize=12, titleFontSize=13).scale(color_scale) if color_field else "black",
-    shape=alt.Shape(f"{style_field}:N").legend(title="Group", labelFontSize=12, titleFontSize=13) if style_field else "circle"
+    color=alt.Color(f"{color_field}:N").legend(title=legend_title, labelFontSize=12, titleFontSize=13).scale(color_scale) if color_field else alt.value("black"),
+    shape=alt.Shape(f"{style_field}:N").legend(title="Group", labelFontSize=12, titleFontSize=13) if style_field else alt.value("circle")
   )
 
   # --- Create the loadings plot ---
