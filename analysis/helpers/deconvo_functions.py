@@ -189,6 +189,7 @@ def biplot_fractions(
   legend_title: str = "Cycle Phase",
   color_field: str = None, # Added for flexibility
   style_field: str = None, # Added for flexibility
+  style_title: str = "Group",
   color_scale: alt.Scale = None, # Added color scale parameter
   text_limit = 0.04, # controls on how much labels are shown
   dims = (400, 300)
@@ -219,7 +220,7 @@ def biplot_fractions(
   pca_df = (
     pd.DataFrame(data=pca.fit_transform(fractions_df), columns=["PC1", "PC2"])
     .set_index(fractions_df.index)
-    .merge(phenotype_df, left_index=True, right_index=True)
+    .merge(phenotype_df, left_index=True, right_index=True, how="inner")
   )
   expl_var = pca.explained_variance_ratio_
   loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
@@ -227,14 +228,22 @@ def biplot_fractions(
     loadings, index=fractions_df.columns, columns=["PC1", "PC2"]
   ).reset_index()  # Reset index for Altair
 
+  # --- Define Color Encoding Safely ---
+  if color_field:
+    c = alt.Color(f"{color_field}:N").legend(title=legend_title, labelFontSize=12, titleFontSize=13)
+    if color_scale:
+      c = c.scale(color_scale)
+  else:
+    c = alt.value("black")
+
   # --- Create the base scatter plot ---
   scatter = alt.Chart(pca_df).mark_point(
     size=40, filled=True
   ).encode(
     x=alt.X("PC1:Q", axis=alt.Axis(title=f"PC1 ({expl_var[0]:.2%})", tickCount=1)),
     y=alt.Y("PC2:Q", axis=alt.Axis(title=f"PC2 ({expl_var[1]:.2%})", tickCount=1)),
-    color=alt.Color(f"{color_field}:N").legend(title=legend_title, labelFontSize=12, titleFontSize=13).scale(color_scale) if color_field else alt.value("black"),
-    shape=alt.Shape(f"{style_field}:N").legend(title="Group", labelFontSize=12, titleFontSize=13) if style_field else alt.value("circle")
+    color=c,
+    shape=alt.Shape(f"{style_field}:N").legend(title=style_title, labelFontSize=12, titleFontSize=13) if style_field else alt.value("circle")
   )
 
   # --- Create the loadings plot ---

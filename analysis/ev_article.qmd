@@ -2018,10 +2018,26 @@ supp_1.interactive()
 ## Supp X. Clinical samples
 
 ```{python}
+## load in clinical samples
+clin_uf_raw = pd.read_feather(Path(data_folder).expanduser() / "clin_counts_raw.feather").iloc[:-1]
+clin_uf_pheno = pd.read_table(Path(data_folder).expanduser() / "phenotype_clin.tsv").set_index("samplename")
+clin_uf_pheno = clin_uf_pheno.query("samplename in @clin_uf_raw.columns")
+## change the gene_id for the clinical samples
+annot = pd.read_csv(Path(raw_data_folder).expanduser() / "annot_table.csv")
+clin_uf_raw = (
+  clin_uf_raw
+  .merge(annot, left_on='gene_id', right_on='ensembl_gene_id')
+  .drop(["ensembl_gene_id", "description", "gene_id"], axis=1)
+  .groupby("external_gene_name")
+  .sum()
+)
+clin_uf_raw.index.name = "gene_id"
+clin_uf_raw = clin_uf_raw.loc[:, clin_uf_pheno.index]
 
 fractions_file = fractions_folder / "clin_fracs.tsv"
-frac_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
-
+frac_clin_pred = pd.read_table(fractions_file, sep="\t", index_col=0)
+## we select only the EF samples that had the same protocol
+frac_clin_pred = frac_clin_pred.query("~samplename.str.startswith('EF')")
 ```
 
 As the proportions still add up to one, we can also generate a stacked barplot for the cell proportions per cell type over all the samples.
@@ -2029,7 +2045,7 @@ As the proportions still add up to one, we can also generate a stacked barplot f
 ```{python}
 
 dendro_barplot(
-  frac_pred, 
+  frac_clin_pred, 
   clin_uf_pheno,
   legend_phase_bbox=(1.05, .1),
   legend_class_bbox=(1.05, .1),
@@ -2046,7 +2062,7 @@ The overall changes throughout the clinical statuses averaged over all the sampl
 
 fig1 = peruvian_sands(
   fractions_df=peruvian_transform(
-      fractions=frac_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==1"), grouping_ids=["implantation"]
+      fractions=frac_clin_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==1"), grouping_ids=["implantation"]
     ), 
   x_axis_col="implantation",
   x_title="Implantation?",
@@ -2057,7 +2073,7 @@ fig1 = peruvian_sands(
 
 fig2 = peruvian_sands(
   fractions_df=peruvian_transform(
-      fractions=frac_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==2"), grouping_ids=["implantation"]
+      fractions=frac_clin_pred, phenotype=clin_uf_pheno.query("n_transfer_embryo==2"), grouping_ids=["implantation"]
     ), 
   x_axis_col="implantation",
   x_title="Implantation?",
@@ -2079,10 +2095,47 @@ Apply PCA on the proportions.
 ```{python}
 
 biplot_fractions(
-  frac_pred, clin_uf_pheno, 
+  frac_clin_pred, clin_uf_pheno, 
   legend_title="Implantation", 
-  color_field="implantation"
+  color_field="implantation",
+  style_field="n_transfer_embryo"
 )[0]
+
+```
+
+Project clinical samples to biopsy reference.
+
+```{python}
+
+## don't scale as the values are props anyways
+pca = PCA(n_components=2)
+frac_uf_mat = frac_ccht_mat.loc[ccht_uf_pheno.query("group == 'biopsy'").index]
+pca = pca.fit(frac_uf_mat)
+
+pca_df_ccht = (
+  pd.DataFrame(
+    data=pca.transform(frac_uf_mat),
+    columns=["PC1", "PC2"]
+    )
+  .set_index(frac_uf_mat.index)
+  .merge(ccht_uf_pheno, left_index=True, right_index=True)
+  .drop(columns=["group"])
+  .rename(columns={"cyclephase": "group"})
+)
+
+pca_df_clin = (
+  pd.DataFrame(data=pca.transform(frac_clin), columns=["PC1", "PC2"])
+  .set_index(frac_clin.index)
+  .merge(clin_uf_pheno, left_index=True, right_index=True)
+  .replace({True: "imp", False: "non-imp"})
+  .rename(columns={"implantation": "group", "n_transfer_embryo": "dataset"})
+)
+
+pca_df = pd.concat([pca_df_ccht, pca_df_clin])
+
+# Visualize the PCA results
+plt.figure(figsize=(8, 6))
+sns.scatterplot(x='PC1', y='PC2', hue='group', style="dataset", data=pca_df, palette='Set2')
 
 ```
 
@@ -2094,7 +2147,7 @@ Perform t-test for the pairwise differences of RIF and CTRL samples for each cel
 
 ```{python}
 
-frac_long = convert_to_long(frac_pred, clin_uf_pheno).drop(columns=["n_transfer_embryo"])
+frac_long = convert_to_long(frac_clin_pred, clin_uf_pheno).drop(columns=["n_transfer_embryo"])
 
 # write the t-testing function
 ttest_table = pd.DataFrame({
@@ -2105,6 +2158,6 @@ ttest_table = pd.DataFrame({
   for celltype, dat in frac_long.groupby("celltype")
 }).T
 
-ttest_table.to_excel(fractions_folder / "clin_test.xlsx", sheet_name="clin")
+# ttest_table.to_excel(fractions_folder / "clin_test.xlsx", sheet_name="clin")
 
 ```

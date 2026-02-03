@@ -55,6 +55,9 @@ pytorch-cuda = "12.1.*"
 [feature.proc.pypi-dependencies]
 tangram-sc = "*"
 
+[feature.pydeconv.pypi-dependencies]
+pydeconv = "*"
+
 [feature.r-analysis]
 channels = ["conda-forge", "bioconda", "r"]
 
@@ -82,4 +85,5 @@ bioconductor-limma = "*"
 [environments]
 analysis = ["python-core", "analysis"]
 proc = ["python-core", "proc"]
+pydeconv = ["python-core", "pydeconv"]
 r-analysis = ["r-analysis"]
