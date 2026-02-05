@@ -45,7 +45,8 @@ channels = [
 
 [feature.proc.dependencies]
 scrublet = "*"
-omicverse = "==1.6.7"
+omicverse = "==1.6.8"
+transformers = "==4.42.4"
 # GPU stack
 pytorch = "*"
 torchvision = "*"

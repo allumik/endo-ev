@@ -81,7 +81,6 @@ gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
 ```{python}
 # Load the data
 data_directory = Path(anndata_folder).expanduser() # Current directory, adjust as needed
-# load only the early secretory samples
 adata_collection = load_spatial_data(data_directory)
 ```
 
@@ -110,7 +109,11 @@ In addition, we have subset some of the more niche celltypes that either don't e
 jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
 
 # Process each slide
-all_slides = ["152806", "152810", "152807", "152811"]
+all_slides = [
+  "152806", "152810", "152807", "152811"
+  "CTR1_processed_data", "CTR2_processed_data", 
+  "CTR3_processed_data", "CTR4_processed_data"
+  ]
 all_results = []
 for slide_id in all_slides:
   print(f"Processing slide: {slide_id}")
@@ -186,6 +189,212 @@ all_results.to_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
 
 
 ::: {.panel-tabset}
+
+## Mid-secretory samples
+
+For the following analysis, we will look at only the early secretory samples - 152807 and 152811.
+
+```{python}
+# some preliminary metrics
+slide_ids = ["CTR1_processed_data", "CTR2_processed_data", "CTR3_processed_data", "CTR4_processed_data"]
+stats_df = all_results.query("slide_id in @slide_ids").copy()
+```
+
+After running the analysis, we plot the stats. We do boxplots for the main difference between EVvsREF and BIOvsREF cases to see how the EV profiles affect the projection. And for the other metrics, we will do comparative scatter plots with the decision boundary for the correlation and for the overlap index. We separte those plots into 3 lineages, excluding the Vascular with only 2 celltypes.
+
+Therefore, we end up with:
+* Three boxplots for the MAD, Centroid Distance and Jacard index
+* Pearson correlation plots for every lineage, in total 3 plots
+* Finally, 2 Volcano plots with Moran's and Ripley stats
+
+After running the analysis, we plot the stats as a line plot, comparing all the different cell types and also average them by the lineage.
+
+```{python}
+# Prep the data
+plot_df_pairwise = stats_df[stats_df['comparison'].isin(['ev_vs_ref', 'bio_vs_ref'])].copy()
+# Don't use some metrics that visualise later
+exclude_metrics = ["Pearson Correlation"]
+# Determine number of metrics for layout
+col_wrap = 3
+
+g = sns.catplot(
+  data=plot_df_pairwise.query("metric not in @exclude_metrics"),
+  x='lineage',     # Cell types on X
+  y='value',         # Statistic value on Y
+  hue='comparison',  # Color by ev_vs_ref or bio_vs_ref
+  col='metric',      # Facet by metric
+  kind='box',        # Use boxplots to show distribution across slides
+  col_wrap=col_wrap, # Arrange facets
+  sharey=False,      # IMPORTANT: Metrics have different scales
+  sharex=False,      # IMPORTANT: Metrics have different scales
+  height=4,          # Adjust size as needed
+  aspect=1.1,        # Adjust aspect ratio
+  legend_out=True
+)
+
+# Improve readability
+g.set_xticklabels(rotation=90)
+g.set_titles(col_template="{col_name}") # Clean titles
+g.fig.suptitle('Comparison Metrics: EV vs. BIO relative to REF (across slides)', y=1.03) # Overall title
+```
+
+```{python}
+metric_to_plot = 'Pearson Correlation' # Choose a metric
+scatter_df = (
+  plot_df_pairwise[plot_df_pairwise['metric'] == metric_to_plot]
+  .pivot_table(index=['slide_id', 'celltype', 'lineage'], columns='comparison', values='value')
+  .reset_index()
+)
+scatter_df.dropna(inplace=True) # Drop rows if one comparison is missing
+
+# plot the data now
+g = sns.FacetGrid(scatter_df, col="lineage", hue="celltype", col_wrap=3, height=4, aspect=1.1)
+g.map(sns.scatterplot, "ev_vs_ref", "bio_vs_ref", alpha=0.7)
+
+# Add y=x line for reference
+for ax in g.axes.flat:
+  lims = [min(ax.get_xlim()[0], ax.get_ylim()[0]), max(ax.get_xlim()[1], ax.get_ylim()[1])]
+  ax.plot(lims, lims, 'k--', alpha=0.25, zorder=0, label=None)
+
+g.set_titles(col_template="{col_name}") # Clean titles
+g.fig.suptitle(f'{metric_to_plot}: EV vs REF & BIO vs REF', y=1.03) # Overall title
+```
+
+And now for the Moran's I compared to the Morans' simulated FDR (based on 1000 iterations). The Moran's I is a measure of spatial autocorrelation, and the FDR is a measure of how significant the Moran's I is compared to random distributions. We will plot the Moran's I against the FDR for each cell type and lineage, with a horizontal line at FDR = 0.05 to indicate significance.
+
+```{python}
+# Filter for Moran's I metrics
+moran_df = stats_df[stats_df['metric'].isin(['Moran I', 'Moran I FDR'])].copy()
+
+# Pivot the table to get Moran I and FDR side-by-side
+moran_pivot = (
+  moran_df.pivot_table(
+    index=['slide_id', 'celltype', 'lineage', 'comparison'],
+    columns='metric',
+    values='value'
+  )
+  .reset_index()
+  .rename_axis(None, axis=1) # Remove the 'metric' name from columns index
+)
+
+# Define a custom plotting function for each facet
+def facet_scatter(data, **kwargs):
+  ax = plt.gca() # Get current axis
+  # Plot scatter points for the current facet's data
+  sns.scatterplot(data=data, x="Moran I", y="Moran I FDR", hue="celltype",
+                  alpha=0.7, ax=ax, legend=False, **kwargs) # Turn off default legend
+  # Add lines connecting points of the same celltype across slides
+  # Only draw lines if there are multiple points for a celltype (i.e., across slides)
+  if data['celltype'].nunique() < len(data):
+      sns.lineplot(
+          data=data, x="Moran I", y="Moran I FDR", hue="celltype", alpha=0.3,
+          units="celltype", estimator=None, sort=True, ax=ax, legend=False
+      )
+
+  # Apply axis modifications
+  ax.axhline(0.05, ls='--', color='grey', alpha=0.5, zorder=0)
+  ax.set_ylabel("Moran's I FDR (log scale)")
+  ax.set_xlabel("Moran's I")
+  ax.set_yscale('log')
+  ax.invert_yaxis()
+
+  # Manually set Y-axis ticks
+  # Define desired tick values (adjust these based on your data range)
+  tick_values = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.001]
+  # Create corresponding labels
+  tick_labels = [str(val) for val in tick_values]
+
+  ax.yaxis.set_major_locator(ticker.FixedLocator(tick_values))
+  ax.yaxis.set_major_formatter(ticker.FixedFormatter(tick_labels))
+  # Ensure y-limits accommodate the ticks if needed
+  current_ylim = ax.get_ylim()
+  ax.set_ylim(max(current_ylim[0], max(tick_values)*1.1), min(current_ylim[1], min(tick_values)*0.9))
+
+
+  # Manually add legend to the side of each facet
+  handles, labels = ax.get_legend_handles_labels()
+  # Filter out potential duplicate legend entries if lineplot adds them
+  unique_handles_labels = {}
+  for handle, label in zip(handles, labels):
+      if label not in unique_handles_labels:
+          unique_handles_labels[label] = handle
+  ax.legend(unique_handles_labels.values(), unique_handles_labels.keys(),
+            title="Celltype", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+
+# Create the FacetGrid instance with rows for comparison and columns for lineage
+g = sns.FacetGrid(
+  moran_pivot,
+  row="comparison", col="lineage",
+  height=3.5, aspect=1.2,
+  sharey=True, sharex=False, legend_out=False,
+  margin_titles=True
+  ) # Add margin titles for row/col names
+
+# Map the custom plotting function to each facet
+g.map_dataframe(facet_scatter)
+
+# Add titles and adjust layout
+g.set_titles(row_template="{row_name}", col_template="{col_name}") # Set row/col titles
+g.fig.suptitle("Moran's I vs. FDR by Lineage and Comparison", y=1.03) # Overall title
+plt.tight_layout(rect=[0, 0, 0.9, 0.97]) # Adjust rect to prevent legend overlap
+plt.show()
+```
+
+Now we can also look at the Ripley's L-function, which is a measure of spatial clustering. We will plot the Ripley's L-function AUC against the maximum p-value observed across distances for each cell type and lineage, with a horizontal line at p=0.05 to indicate significance.
+
+```{python}
+# Filter for Ripley's L metrics
+ripley_df = stats_df[stats_df['metric'].isin(['Ripley L AUC', 'Ripley L Max PValue'])].copy()
+
+# Pivot the table to get Ripley's L AUC and Max PValue side-by-side
+ripley_pivot = (
+  ripley_df.pivot_table(
+    index=['slide_id', 'celltype', 'lineage', 'comparison'],
+    columns='metric',
+    values='value'
+  )
+  .reset_index()
+  .rename_axis(None, axis=1) # Remove the 'metric' name from columns index
+)
+
+# Define a custom plotting function for each facet
+def facet_scatter(data, **kwargs):
+  ax = plt.gca() # Get current axis
+  # Plot scatter points for the current facet's data
+  sns.scatterplot(data=data, x="Ripley L AUC", y="Ripley L Max PValue", hue="celltype",
+                  alpha=0.7, ax=ax, legend=False, **kwargs) # Turn off default legend
+  # Add lines connecting points of the same celltype across slides
+  sns.lineplot(
+    data=data, x="Ripley L AUC", y="Ripley L Max PValue", hue="celltype", alpha=0.3,
+    units="celltype", estimator=None, sort=True, ax=ax, legend=False
+    )
+
+  # Apply axis modifications
+  ax.axhline(0.05, ls='--', color='grey', alpha=0.5, zorder=0)
+  ax.set_ylabel("Ripley's L Max PValue")
+  ax.set_xlabel("Ripley's L AUC")
+  ax.invert_yaxis()
+
+  # Manually add legend to the side of each facet
+  handles, labels = ax.get_legend_handles_labels()
+  ax.legend(handles, labels, title="Celltype", bbox_to_anchor=(1.05, 1), loc='upper left')
+
+# Create the FacetGrid instance
+g = sns.FacetGrid(ripley_pivot, col="lineage", col_wrap=3, height=4, aspect=1.1,
+                  sharey=True, sharex=False, legend_out=False)
+
+# Map the custom plotting function to each facet
+g.map_dataframe(facet_scatter)
+
+# Add titles and adjust layout
+g.set_titles(col_template="{col_name}")
+g.fig.suptitle("Ripley's L AUC vs. Max PValue by Lineage and Comparison", y=1.03)
+plt.tight_layout(rect=[0, 0, 0.9, 0.97])
+plt.show()
+```
+
+Maybe we will abandon the Ripley's L-function for now, as it is not as interpretable as the Moran's I. The Ripley's L-function is a measure of spatial clustering, but it can be difficult to interpret in terms of biological significance. The Moran's I is a more straightforward measure of spatial autocorrelation, and it is easier to interpret in terms of clustering patterns. Additionally, Ripley would be useful to look at the spatial distribution of a single cell type, but we are looking at the spatial distribution of multiple cell types in this case. The Moran's I is more appropriate for this type of analysis, as it takes into account the spatial relationships between all cell types.
+
 
 ## Early-secretory samples
 
@@ -648,4 +857,41 @@ vis_dat = adata_collection[("152807", "ref")].copy()
 genes_of_interest = ["THY1", "ALDH1A1", "ALDH1A2", "ALDH1A3", "ALDH1B1"]
 # the original unfiltered slide is stored within the ".raw" object
 sq.pl.spatial_scatter(vis_dat, use_raw=True, cmap='magma', ncols=2, color=genes_of_interest)
+```
+
+In addition, lets look at some EV biomarker genes as well.
+
+```{python}
+## Create a dictionary of all the genes we want to plot, and then go per key
+all_genes = {
+  "ESCRT-0": ["HGS", "STAM", "STAM2"],
+  "ESCRT-I": ["MVB12A", "MVB12B", "TSG101", "UBAP1", "VPS28", "VPS37A", "VPS37B", "VPS37C", "VPS37D"],
+  "ESCRT-II": ["SNF8", "VPS25", "VPS36"],
+  "ESCRT-III": ["CHMP2A", "CHMP2B", "CHMP3", "CHMP4A", "CHMP4B", "CHMP4C", "CHMP6"],
+  "ESCRT-IV": ["VPS4A","VPS4B","VTA1"],
+  "ESCRT-independent": ["RAB31", "SMPD3"],
+  "EV release gene markers": ["RAB27A", "RAB27B", "RAB11A", "RAB11B", "RAB3A", "RAB3B", "RAB3C", "RAB3D", "RAB7A", "RAB7B"],
+  "tetraspanins": ["CD9", "CD63", "CD81", "ALIX", "SDCBP"],
+  "accessory": ["PDCD6IP", "SDCBP", "SDC1", "SDC2", "SDC3", "SDC4"]
+}
+```
+
+```{python}
+for gene_group in all_genes.keys():
+  print(f"All genes in group: {gene_group}")
+  tmp_dat = vis_dat.raw
+  genes_of_interest = all_genes[gene_group]
+  genes_of_interest = np.intersect1d(genes_of_interest, tmp_dat.var_names.tolist())
+  # the original unfiltered slide is stored within the ".raw" object
+  sq.pl.spatial_scatter(vis_dat, use_raw=True, cmap='magma', ncols=2, color=genes_of_interest.tolist())
+```
+
+# Correlation between cell profile and EV biomarkers
+
+Here we are interested in the correlation between the expression of EV biomarkers and the cell profiles in the spatial transcriptomic data. This can help us understand how different cell types contribute to EV production and release in the tissue context.
+
+```{python}
+
+
+
 ```
