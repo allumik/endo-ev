@@ -68,7 +68,7 @@ def load_spatial_data(data_dir, pattern="c2l_*.h5ad"):
 
   for file_path in file_paths:
     file_name = os.path.basename(file_path)
-    match = re.match(r"c2l_(\d*?)_(ev|bio|ref)\.h5ad", file_name)
+    match = re.match(r"c2l_(.*?)_(ev|bio|ref)\.h5ad", file_name)
     if match:
       slide_id = match.group(1)
       ref_type = match.group(2)

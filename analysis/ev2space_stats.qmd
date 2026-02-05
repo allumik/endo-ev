@@ -110,7 +110,7 @@ jaccard_thresh = 0.25 # Use lower quartile for Jaccard and Centroid distance
 
 # Process each slide
 all_slides = [
-  "152806", "152810", "152807", "152811"
+  "152806", "152810", "152807", "152811",
   "CTR1_processed_data", "CTR2_processed_data", 
   "CTR3_processed_data", "CTR4_processed_data"
   ]
@@ -191,8 +191,6 @@ all_results.to_csv(Path(data_folder).expanduser() / "st_stats_table.csv")
 ::: {.panel-tabset}
 
 ## Mid-secretory samples
-
-For the following analysis, we will look at only the early secretory samples - 152807 and 152811.
 
 ```{python}
 # some preliminary metrics
