@@ -1,0 +1,190 @@
+---
+title: "Single cell perspective into Extracellular Vesicules projected onto Spatial Transcriptomics"
+format:
+  html:
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+    self-contained-math: true
+jupyter: python3
+---
+
+# Load in data
+
+Set up the environment and load the deps:
+
+```{python}
+#| output: false
+
+import re
+import os
+import glob
+import warnings
+import pandas as pd
+import numpy as np
+import scanpy as sc
+import squidpy as sq
+import anndata as an
+from pathlib import Path
+from dotenv import load_dotenv
+from scipy.sparse import csr_matrix
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import seaborn as sns
+
+# pd.set_option('display.max_columns', 100)
+
+## import the functions used in this report (got too long to include them in the report)
+try: from analysis.helpers.projection_functions import *
+except ImportError: from helpers.projection_functions import *
+
+## load the environment variables from the .env file
+load_dotenv()
+if os.getenv("DATA_FOLDER") is None:
+  load_dotenv(Path.cwd() / ".env")
+
+anndata_folder = os.getenv("ANNDATA_FOLDER")
+atlas_folder = os.getenv("ATLAS_FOLDER")
+data_folder = os.getenv("DATA_FOLDER")
+st_folder = os.getenv("ST_FOLDER")
+model_folder = Path(data_folder).expanduser() / "saved_models"
+raw_data_folder = os.getenv("RAW_DATA_FOLDER")
+
+```
+
+
+Load in the spatial slides experiments
+
+```{python}
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_ev.h5ad"
+gen_ccht_ev = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+gen_sc_file = Path(anndata_folder).expanduser() / "gen_sc_biopsy.h5ad"
+gen_ccht_bio = sc.read_h5ad(gen_sc_file, backed="r").to_memory()
+```
+
+```{python}
+# Load the data
+data_directory = Path(anndata_folder).expanduser() # Current directory, adjust as needed
+adata_collection = load_spatial_data(data_directory)
+```
+
+
+# Look at specific gene expression profiles in spatial transcriptomic slides
+
+## Fibroblasts in myometrium
+
+From Elina:
+
+>Ma oletan, et äkki näeme strooma rakke projitseerituna müomeetriumi, sest seal võivad reaalselt olla fibroblastid.
+>
+>Leidsin selle artikli: https://academic.oup.com/molehr/article/20/3/250/1114116
+>
+>Kas sa saaksid vaadata, kas need "strooma rakud" mis asuvad müomeetriumis ekspresseerivad geene CD90, ALDH1A1, ALDH1A2, ALDH1A3, ALDH1B1?
+
+First let's project the abundances of the stromal cell types on the slide with the scRNA-seq data. We are using slide with id 152807 (Early-Secretory)
+
+::: {.panel-tabset}
+### Reference
+```{python}
+vis_dat = adata_collection[("152807", "ref")].copy()
+sq.pl.spatial_scatter(vis_dat, cmap='magma', ncols=2,
+  color=vis_dat.obs.columns[vis_dat.obs.columns.str.contains("stroma", case=False)])
+```
+### EV
+```{python}
+vis_dat = adata_collection[("152807", "ev")].copy()
+sq.pl.spatial_scatter(vis_dat, cmap='magma', ncols=2,
+  color=vis_dat.obs.columns[vis_dat.obs.columns.str.contains("stroma", case=False)])
+```
+### Biopsy
+```{python}
+vis_dat = adata_collection[("152807", "bio")].copy()
+sq.pl.spatial_scatter(vis_dat, cmap='magma', ncols=2,
+  color=vis_dat.obs.columns[vis_dat.obs.columns.str.contains("stroma", case=False)])
+```
+:::
+
+Then we look at specific gene expression profiles in the slide, the genes were interested in are CD90, ALDH1A1, ALDH1A2, ALDH1A3, ALDH1B1. CD90 does not seem to be in the dataset, mightve been filtered out via the highly variable gene filtering or it has an alternative name here. We do have an aliased genes for the CD90, the THY1.
+
+For this view, we do not to look at different projections, as we are looking at the expression of the genes in the original spatial transcrpitomic slide itself.
+
+```{python}
+slide_id = "152807"
+vis_dat = adata_collection[("152807", "ref")].copy()
+genes_of_interest = ["THY1", "ALDH1A1", "ALDH1A2", "ALDH1A3", "ALDH1B1"]
+# the original unfiltered slide is stored within the ".raw" object
+sq.pl.spatial_scatter(vis_dat, use_raw=True, cmap='magma', ncols=2, color=genes_of_interest)
+```
+
+## EV biomarker gene projection
+
+In addition, lets look at some EV biomarker genes as well. As we have a lot of slides, we are looking at only a selection of them, ie one per cycle phase to project, and plot the gene group scores.
+
+```{python}
+## Create a dictionary of all the genes we want to plot, and then go per key
+all_genes = {
+  "ESCRT-0": ["HGS", "STAM", "STAM2"],
+  "ESCRT-I": ["MVB12A", "MVB12B", "TSG101", "UBAP1", "VPS28", "VPS37A", "VPS37B", "VPS37C", "VPS37D"],
+  "ESCRT-II": ["SNF8", "VPS25", "VPS36"],
+  "ESCRT-III": ["CHMP2A", "CHMP2B", "CHMP3", "CHMP4A", "CHMP4B", "CHMP4C", "CHMP6"],
+  "ESCRT-IV": ["VPS4A","VPS4B","VTA1"],
+  "ESCRT-independent": ["RAB31", "SMPD3"],
+  "EV release gene markers": ["RAB27A", "RAB27B", "RAB11A", "RAB11B", "RAB3A", "RAB3B", "RAB3C", "RAB3D", "RAB7A", "RAB7B"],
+  "tetraspanins": ["CD9", "CD63", "CD81", "ALIX", "SDCBP"],
+  "accessory": ["PDCD6IP", "SDCBP", "SDC1", "SDC2", "SDC3", "SDC4"]
+}
+
+# TODO: write a function to calculate scores per gene group
+
+vis_dat = adata_collection[("152807", "ref")].copy()
+gene_group = "accessory"
+vis_tmp = sc.tl.score_genes(
+  vis_dat, gene_list=all_genes[gene_group], 
+  ctrl_as_ref=False, use_raw=True,
+  score_name=gene_group, copy=True
+  )
+sq.pl.spatial_scatter(vis_tmp, use_raw=True, cmap='magma', color=gene_group)
+
+def plot_gene_group(vis_dat, genes_of_interest):
+  tmp_dat = vis_dat.raw
+  genes_of_interest = np.intersect1d(genes_of_interest, tmp_dat.var_names.tolist())
+  # the original unfiltered slide is stored within the ".raw" object
+  sq.pl.spatial_scatter(vis_dat, use_raw=True, cmap='magma', ncols=2, color=genes_of_interest.tolist())
+```
+
+::: {.panel-tabset}
+
+### Proliferative
+
+```{python}
+# select the slide
+vis_dat = adata_collection[("CTR1_processed_data", "ref")].copy()
+
+for gene_group in all_genes.keys():
+  tmp_dat = vis_dat.raw
+  genes_of_interest = all_genes[gene_group]
+  genes_of_interest = np.intersect1d(genes_of_interest, tmp_dat.var_names.tolist())
+  # the original unfiltered slide is stored within the ".raw" object
+  sq.pl.spatial_scatter(
+    vis_dat, use_raw=True, cmap='magma', ncols=2, color=genes_of_interest.tolist(),
+    title = gene_group
+    )
+```
+
+### Early-secretory
+
+### Mid-secretory
+
+:::
+
+## Correlation between cell profile and EV biomarkers
+
+Here we are interested in the correlation between the expression of EV biomarkers and the cell profiles in the spatial transcriptomic data. This can help us understand how different cell types contribute to EV production and release in the tissue context.
+
+Here, we calculate correlation with the gene group score from previous chapter, and also look at more finetuned gene-specific correlation. For basic approach, we 
+
+```{python}
+
+
+
+```
