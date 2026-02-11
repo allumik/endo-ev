@@ -60,10 +60,11 @@ tangram-sc = "*"
 pydeconv = "*"
 
 [feature.r-analysis]
-channels = ["conda-forge", "bioconda", "r"]
+channels = ["conda-forge", "r", "bioconda"]
 
 [feature.r-analysis.dependencies]
 r-base = ">=4.1"
+r-essentials = "*"       # Adds standard recommended packages and tools
 r-tidyverse = "*"
 r-tidymodels = "*"
 r-dotenv = "*"
@@ -77,6 +78,11 @@ r-feather = "*"
 r-glue = "*"
 r-biomartr = "*"
 r-statmod = "*"
+r-seurat = "*"
+r-sp = "*"
+r-dwls = "*"
+bioconductor-singlecellexperiment = "*"
+bioconductor-zellkonverter = "*"
 bioconductor-rtracklayer = "*"
 bioconductor-sva = "*"
 bioconductor-edger = "*"
