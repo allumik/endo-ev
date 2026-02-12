@@ -270,7 +270,102 @@ def calculate_scores(vis_dat, gene_dict):
       )
   return vis_dat
 
-def calculate_correlations(
+def calculate_correlations(vis_dat, gene_groups, obsm_key, quantile_threshold=0.75, n_perms=1000):
+  """
+  Calculates Pearson correlation, Jaccard index, and Bivariate Lee's L 
+  between gene group scores and cell type abundances.
+  
+  Returns matrices for the metrics and the Lee's L P-value (uncorrected).
+  """
+  if obsm_key not in vis_dat.obsm.keys():
+    raise KeyError(f"{obsm_key} not found in adata.obsm")
+
+  # --- 1. Prepare Spatial Weights ---
+  if "spatial_connectivities" not in vis_dat.obsp:
+    sq.gr.spatial_neighbors(vis_dat)
+  
+  W = vis_dat.obsp["spatial_connectivities"]
+  
+  # Row-normalize W (Critical for Lee's L)
+  row_sums = np.array(W.sum(axis=1)).flatten()
+  with np.errstate(divide='ignore', invalid='ignore'):
+    W_norm = W.multiply(1 / row_sums[:, np.newaxis])
+    W_norm = W_norm.tocsr() 
+
+  cell_types = vis_dat.obsm[obsm_key].columns
+  
+  # --- 2. Initialize DataFrames ---
+  pearson_df = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
+  jaccard_df = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
+  lees_df    = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
+  lees_pval_df = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
+
+  # --- 3. Iterate and Calculate ---
+  for ct in cell_types:
+    # Prepare Cell Type Vector (Y)
+    y = vis_dat.obsm[obsm_key][ct].values
+    
+    # Pre-calculate Spatial Lag of Y (W * y)
+    # Standardize Y first (Z_y)
+    if np.std(y) > 1e-12:
+      y_std = (y - np.mean(y)) / np.std(y)
+      y_lag = W_norm.dot(y_std) # Lag of standardized Y
+    else:
+      y_std, y_lag = None, None
+
+    for group in gene_groups:
+      if group not in vis_dat.obs.columns:
+        continue
+      
+      # Prepare Gene Group Vector (X)
+      x = vis_dat.obs[group].values
+      
+      # --- Metric 1: Pearson Correlation (Point-wise) ---
+      if np.std(y) > 1e-12 and np.std(x) > 1e-12:
+        pearson_df.loc[ct, group] = pearsonr(y, x)[0]
+      else:
+        pearson_df.loc[ct, group] = 0.0
+      
+      # --- Metric 2: Jaccard Index ---
+      q_y = np.quantile(y, quantile_threshold)
+      q_x = np.quantile(x, quantile_threshold)
+      jaccard_df.loc[ct, group] = jaccard_score(y > q_y, x > q_x)
+
+      # --- Metric 3: Bivariate Lee's L ---
+      # Formula for row-standardized W: L = (W*Z_x) . (W*Z_y) / N
+      # This essentially correlates the spatial smoothing of X with spatial smoothing of Y
+      if y_lag is not None and np.std(x) > 1e-12:
+        x_std = (x - np.mean(x)) / np.std(x)
+        x_lag = W_norm.dot(x_std) # Lag of standardized X
+        
+        N = len(x)
+        
+        # Observed Lee's L
+        # Dot product of the two lag vectors divided by N
+        obs_L = (x_lag @ y_lag) / N
+        lees_df.loc[ct, group] = obs_L
+        
+        # Permutation Test
+        # We shuffle X, re-calculate its Lag, and correlate with fixed Lag of Y
+        sim_Ls = np.zeros(n_perms)
+        x_perm = x_std.copy()
+        
+        for p in range(n_perms):
+          np.random.shuffle(x_perm)
+          # Crucial: Must re-lag the shuffled vector!
+          x_perm_lag = W_norm.dot(x_perm) 
+          sim_Ls[p] = (x_perm_lag @ y_lag) / N
+        
+        # Calculate P-value (Pseudo-significance)
+        p_val = (np.sum(sim_Ls >= obs_L) + 1) / (n_perms + 1)
+        lees_pval_df.loc[ct, group] = p_val
+      else:
+        lees_df.loc[ct, group] = np.nan
+        lees_pval_df.loc[ct, group] = np.nan
+
+  return pearson_df, jaccard_df, lees_df, lees_pval_df
+
+def calculate_correlations_morans(
   vis_dat, gene_groups, obsm_key, 
   quantile_threshold=0.75, n_perms=1000, 
   apply_fdr_correction=False
@@ -403,7 +498,7 @@ def plot_correlation_heatmap(data_df, title, metric_name, pval_df=None, sig_thre
     mask = mask | data_df.isna()
 
   # Determine colormap center based on metric type
-  is_diverging = any(x in metric_name for x in ["Correlation", "Moran"])
+  is_diverging = any(x in metric_name for x in ["Correlation", "Lee's L"])
   cmap = "vlag" if is_diverging else "magma"
   center = 0 if is_diverging else None
 
@@ -440,8 +535,8 @@ def aggregate_correlations(slide_ids, adata_collection, gene_groups, obsm_key, q
   accumulators = {
     'pearson': [],
     'jaccard': [],
-    'moran': [],
-    'moran_pval': []
+    'lees_l': [],
+    'lees_pval': []
   }
 
   print(f"Processing {len(slide_ids)} slides: {slide_ids}")
@@ -469,14 +564,14 @@ def aggregate_correlations(slide_ids, adata_collection, gene_groups, obsm_key, q
     
     accumulators['pearson'].append(p)
     accumulators['jaccard'].append(j)
-    accumulators['moran'].append(m)
-    accumulators['moran_pval'].append(m_p)
+    accumulators['lees_l'].append(m)
+    accumulators['lees_pval'].append(m_p)
 
   # 4. Aggregate Results
-  # Average the coefficients (Pearson, Jaccard, Moran's I)
+  # Average the coefficients (Pearson, Jaccard, Lee's L)
   avg_pearson = pd.concat(accumulators['pearson']).groupby(level=0).mean()
   avg_jaccard = pd.concat(accumulators['jaccard']).groupby(level=0).mean()
-  avg_moran   = pd.concat(accumulators['moran']).groupby(level=0).mean()
+  avg_lees   = pd.concat(accumulators['lees_l']).groupby(level=0).mean()
 
   # Combine P-values using Fisher's method
   # We need a custom apply because combine_pvalues expects a list of values
@@ -489,9 +584,9 @@ def aggregate_correlations(slide_ids, adata_collection, gene_groups, obsm_key, q
 
   # Stack all p-value DFs and apply Fisher's method per cell (cell_type x gene_group)
   # This aligns by index (cell_type) and columns (gene_group)
-  combined_pval = pd.concat(accumulators['moran_pval']).groupby(level=0).agg(fisher_agg)
+  combined_pval = pd.concat(accumulators['lees_pval']).groupby(level=0).agg(fisher_agg)
 
-  return avg_pearson, avg_jaccard, avg_moran, combined_pval
+  return avg_pearson, avg_jaccard, avg_lees, combined_pval
 
 def plot_ev_phase_heatmap(cycle_data, gene_col="EV-combined", cell_type_list=None, lineage_info=None, fdr_threshold=0.05):
   """
@@ -499,7 +594,7 @@ def plot_ev_phase_heatmap(cycle_data, gene_col="EV-combined", cell_type_list=Non
   """
   
   # 1. Data Consolidation
-  moran_records = {}
+  lees_records = {}
   fdr_records = {}
   phase_order = ["Proliferative", "Early-Secretory", "Mid-Secretory"]
   
@@ -508,10 +603,10 @@ def plot_ev_phase_heatmap(cycle_data, gene_col="EV-combined", cell_type_list=Non
     m_df, f_df = cycle_data[phase]
     
     if gene_col in m_df.columns:
-      moran_records[phase] = m_df[gene_col]
+      lees_records[phase] = m_df[gene_col]
       fdr_records[phase] = f_df[gene_col]
 
-  plot_df = pd.DataFrame(moran_records).fillna(0)
+  plot_df = pd.DataFrame(lees_records).fillna(0)
   fdr_df = pd.DataFrame(fdr_records)
   
   # 2. Filtering
@@ -591,7 +686,7 @@ def plot_ev_phase_heatmap(cycle_data, gene_col="EV-combined", cell_type_list=Non
   g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=-45, ha='left')
   
   # Colorbar
-  g.ax_cbar.set_ylabel("Bivariate Moran's I", fontsize=10)
+  g.ax_cbar.set_ylabel("Bivariate Lee's L", fontsize=10)
   g.ax_cbar.yaxis.set_label_position("right")
   g.ax_cbar.text(
       0.7, -.15, 
@@ -621,7 +716,7 @@ def plot_nested_dot_plot(phase_results, cell_type_order=None, gene_group_order=N
   Parameters:
   -----------
   phase_results : dict
-      Dictionary { 'PhaseName': (moran_df, pval_df) }
+      Dictionary { 'PhaseName': (lees_df, pval_df) }
   cell_type_order : list (Optional)
       List of cell types to sort the Y-axis.
   gene_group_order : list (Optional)
@@ -642,8 +737,8 @@ def plot_nested_dot_plot(phase_results, cell_type_order=None, gene_group_order=N
     style = next((v for k, v in phase_styles.items() if k in phase_name), None)
     if style is None: continue
     
-    # Process Moran's I
-    m_melt = m_df.reset_index().melt(id_vars='index', var_name='gene_group', value_name='moran')
+    # Process Lee's L
+    m_melt = m_df.reset_index().melt(id_vars='index', var_name='gene_group', value_name='lees_l')
     m_melt.rename(columns={'index': 'cell_type'}, inplace=True)
     
     # Process P-values
@@ -687,9 +782,9 @@ def plot_nested_dot_plot(phase_results, cell_type_order=None, gene_group_order=N
       return
 
   # --- 3. Calculate Global Limits ---
-  # data_min = df_all['moran'].min()
+  # data_min = df_all['lees_l'].min()
   data_min = 0
-  data_max = df_all['moran'].max()
+  data_max = df_all['lees_l'].max()
   vmin, vmax = data_min, data_max
 
   # Mappings (Categoricals ensure the order is preserved in .unique())
@@ -717,7 +812,7 @@ def plot_nested_dot_plot(phase_results, cell_type_order=None, gene_group_order=N
     sc = ax.scatter(
       x=subset['x_coord'],
       y=subset['y_coord'],
-      c=subset['moran'],
+      c=subset['lees_l'],
       s=subset['size'],
       marker=style['marker'],
       cmap='vlag',
@@ -746,7 +841,7 @@ def plot_nested_dot_plot(phase_results, cell_type_order=None, gene_group_order=N
 
   # --- 6. Legends ---
   cbar = plt.colorbar(sc, ax=ax, fraction=0.02, pad=0.02)
-  cbar.set_label("Bivariate Moran's I", fontsize=10)
+  cbar.set_label("Bivariate Lee's L", fontsize=10)
   
   legend_handles = []
   legend_handles.append(mlines.Line2D([], [], color='none', label=r'$\bf{Cycle\ Phase}$'))

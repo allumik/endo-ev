@@ -194,7 +194,7 @@ vis_dat = calculate_scores(vis_dat, all_genes)
 
 # 2. Calculate Correlations
 gene_groups = list(all_genes.keys())
-pearson_mat, jaccard_mat, moran_mat, moran_pval_mat = calculate_correlations(
+pearson_mat, jaccard_mat, lees_mat, lees_pval_mat = calculate_correlations(
   vis_dat, 
   gene_groups=gene_groups, 
   obsm_key=OBSM_KEY,
@@ -204,15 +204,15 @@ pearson_mat, jaccard_mat, moran_mat, moran_pval_mat = calculate_correlations(
 # 3. Plot Heatmaps
 plot_correlation_heatmap(pearson_mat, f"Slide {slide_id}", "Pearson Correlation")
 plot_correlation_heatmap(jaccard_mat, f"Slide {slide_id}", "Jaccard Index (>75%)")
-# plot_correlation_heatmap(moran_mat, f"Slide {slide_id}", "Bivariate Moran's I")
+# plot_correlation_heatmap(lees_mat, f"Slide {slide_id}", "Bivariate lees's I")
 
-# 3. Bivariate Moran's I (WITH Masking)
+# 3. Bivariate lees's I (WITH Masking)
 # Pass the p-value matrix computed in the previous step
 plot_correlation_heatmap(
-    moran_mat, 
+    lees_mat, 
     f"Slide {slide_id}", 
-    "Bivariate Moran's I (Significant Only)", 
-    pval_df=moran_pval_mat, 
+    "Bivariate Lee's L (Significant Only)", 
+    pval_df=lees_pval_mat, 
     sig_threshold=0.05
 )
 
@@ -233,19 +233,19 @@ OBSM_KEY = "tangram_ct_pred"
 ```{python}
 slide_ids = phases["Proliferative"]
 # Run Aggregation
-agg_pearson, agg_jaccard, agg_moran, agg_pval = aggregate_correlations(
+agg_pearson, agg_jaccard, agg_lees, agg_pval = aggregate_correlations(
   slide_ids,
   adata_collection, # Your main dictionary of slides
   all_genes,        # Your gene dictionary
   OBSM_KEY
 )
-results_prolif = (agg_moran, agg_pval)
+results_prolif = (agg_lees, agg_pval)
 
 # Plot the Aggregated Results
 plot_correlation_heatmap(
-    agg_moran, 
+    agg_lees, 
     "Proliferative Phase (Combined)", 
-    "Avg Bivariate Moran's I", 
+    "Avg Bivariate Lee's L", 
     pval_df=agg_pval, 
     sig_threshold=0.05
 )
@@ -257,19 +257,19 @@ plot_correlation_heatmap(
 slide_ids = phases["Early-Secretory"]
 
 # Run Aggregation
-agg_pearson, agg_jaccard, agg_moran, agg_pval = aggregate_correlations(
+agg_pearson, agg_jaccard, agg_lees, agg_pval = aggregate_correlations(
   slide_ids,
   adata_collection, # Your main dictionary of slides
   all_genes,        # Your gene dictionary
   OBSM_KEY
 )
-results_early = (agg_moran, agg_pval)
+results_early = (agg_lees, agg_pval)
 
 # Plot the Aggregated Results
 plot_correlation_heatmap(
-    agg_moran, 
+    agg_lees, 
     "Early Secretory Phase (Combined)", 
-    "Avg Bivariate Moran's I", 
+    "Avg Bivariate Lee's L", 
     pval_df=agg_pval, 
     sig_threshold=0.05
 )
@@ -281,19 +281,19 @@ plot_correlation_heatmap(
 slide_ids = phases["Mid-Secretory"]
 
 # Run Aggregation
-agg_pearson, agg_jaccard, agg_moran, agg_pval = aggregate_correlations(
+agg_pearson, agg_jaccard, agg_lees, agg_pval = aggregate_correlations(
   slide_ids,
   adata_collection, # Your main dictionary of slides
   all_genes,        # Your gene dictionary
   OBSM_KEY
 )
-results_mid = (agg_moran, agg_pval)
+results_mid = (agg_lees, agg_pval)
 
 # Plot the Aggregated Results
 plot_correlation_heatmap(
-  agg_moran, 
+  agg_lees, 
   "Mid Secretory Phase (Combined)",
-  "Avg Bivariate Moran's I",
+  "Avg Bivariate Lee's L",
   pval_df=agg_pval,
   sig_threshold=0.05
 )
@@ -303,7 +303,7 @@ plot_correlation_heatmap(
 
 ## Summing up the results
 
-Here we take the Morans I results and summarize them in a more digestable visual format.
+Here we take the leess I results and summarize them in a more digestable visual format.
 
 Lets make a line plot over cycle phases, take only differentially significant correlations into account, and plot a line plot for each gene group. 
 
@@ -364,13 +364,33 @@ Maybe not include this in the final plot, the frame has wrong size here. Additin
 
 Here we use the `scanpy.tl.score_genes` function to summarise all the EV-related genes together, and focus on general patterns throughout the cycle phases.
 
+But first, we look at univariate Morans' I to check for specificity of the expression of cell types. This would help us filter out cell types that are more spatially clustered, i.e., more morphologically specific. NOTE: This plot would mirror the analysis presented already in ev2space_stats.qmd, so just look at the moran's I values presented there.
+
+```{python}
+
+## NB: just look at ev2space_stats
+## read in the stats table from the ev2space_stats.qmd
+# uni_results = pd.read_csv(Path(data_folder).expanduser() / "st_stats_table.csv", index_col=0)
+# uni_results.assign(slide_id=lambda x:x.slide_id.astype(str)).query("metric == 'Moran I' & comparison == 'ref' & slide_id in @slide_ids")
+
+# TODO: convert the df above to dictionary so it works with the function
+# plot_ev_phase_heatmap(
+#     cycle_all_ev, 
+#     gene_col="Moran I", 
+# #     cell_type_list=general_lineages.index.tolist(), 
+#     lineage_info=general_lineages, 
+#     fdr_threshold=0.05
+# )
+
+```
+
 ```{python}
 
 unified_genes = {"EV-combined": [item for sublist in all_genes.values() for item in sublist]}
 cycle_all_ev = {}
 for phase in phases.keys():
-  _, _, agg_moran, agg_pval = aggregate_correlations(phases[phase], adata_collection, unified_genes, OBSM_KEY)
-  phase_stats = (agg_moran, agg_pval)
+  _, _, agg_lees, agg_pval = aggregate_correlations(phases[phase], adata_collection, unified_genes, OBSM_KEY)
+  phase_stats = (agg_lees, agg_pval)
   cycle_all_ev[phase] = phase_stats
 
 plot_ev_phase_heatmap(
