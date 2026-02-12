@@ -28,11 +28,7 @@ import anndata as an
 from pathlib import Path
 from dotenv import load_dotenv
 from scipy.sparse import csr_matrix
-from scipy.stats import pearsonr, combine_pvalues
-from sklearn.metrics import jaccard_score
-from statsmodels.stats.multitest import multipletests
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import seaborn as sns
 
 # pd.set_option('display.max_columns', 100)
@@ -63,6 +59,12 @@ Load in the spatial slides experiments
 # Load the data
 data_directory = Path(anndata_folder).expanduser() # Current directory, adjust as needed
 adata_collection = load_spatial_data(data_directory)
+
+phases = {
+  "Proliferative": ["152806", "152810"],
+  "Early-Secretory": ["152807", "152811"],
+  "Mid-Secretory": ["CTR1_processed_data", "CTR2_processed_data", "CTR3_processed_data", "CTR4_processed_data"]
+  }
 ```
 
 
@@ -129,31 +131,7 @@ all_genes = {
   "EV release gene markers": ["RAB27A", "RAB27B", "RAB11A", "RAB11B", "RAB3A", "RAB3B", "RAB3C", "RAB3D", "RAB7A", "RAB7B"]
 }
 
-def plot_gene_group(vis_dat, genes_of_interest):
-  tmp_dat = vis_dat.raw
-  genes_of_interest = np.intersect1d(genes_of_interest, tmp_dat.var_names.tolist())
-  # the original unfiltered slide is stored within the ".raw" object
-  sq.pl.spatial_scatter(vis_dat, use_raw=True, cmap='magma', ncols=2, color=genes_of_interest.tolist())
-
-# TODO: write a function to calculate scores per gene group
-def calculate_scores(vis_dat, gene_dict):
-  """
-  Calculates gene set scores for provided gene groups.
-  """
-  # Iterate over the dictionary to score each group
-  for group, genes in gene_dict.items():
-    # Intersect with available genes in raw data
-    valid_genes = [g for g in genes if g in vis_dat.raw.var_names]
-    
-    if len(valid_genes) > 0:
-      sc.tl.score_genes(
-        vis_dat, 
-        gene_list=valid_genes, 
-        ctrl_as_ref=False, 
-        use_raw=True, 
-        score_name=group
-      )
-  return vis_dat
+print("Gene groups:", all_genes)
 
 ```
 
@@ -201,172 +179,7 @@ sq.pl.spatial_scatter(
 
 Here we are interested in the correlation between the expression of EV biomarkers and the cell profiles in the spatial transcriptomic data. This can help us understand how different cell types contribute to EV production and release in the tissue context.
 
-Here, we calculate correlation with the gene group score from previous chapter, and also look at more finetuned gene-specific correlation. For basic approach, we 
-
-```{python}
-
-def calculate_correlations(
-  vis_dat, gene_groups, obsm_key, 
-  quantile_threshold=0.75, n_perms=1000, 
-  apply_fdr_correction=False
-  ):
-  """
-  Calculates Pearson correlation, Jaccard index, and Bivariate Moran's I 
-  between gene group scores and cell type abundances.
-  
-  Returns matrices for the metrics and the Bivariate Moran's I P-value (uncorrected).
-  """
-  if obsm_key not in vis_dat.obsm.keys():
-    raise KeyError(f"{obsm_key} not found in adata.obsm")
-
-  # --- 1. Prepare Spatial Weights ---
-  # Calculate spatial neighbors if not present
-  if "spatial_connectivities" not in vis_dat.obsp:
-    sq.gr.spatial_neighbors(vis_dat)
-  
-  W = vis_dat.obsp["spatial_connectivities"]
-  
-  # Row-normalize W for Moran's I calculation
-  # This ensures the lag is the average of the neighbors
-  row_sums = np.array(W.sum(axis=1)).flatten()
-  with np.errstate(divide='ignore', invalid='ignore'):
-    W_norm = W.multiply(1 / row_sums[:, np.newaxis])
-    W_norm = W_norm.tocsr() 
-
-  cell_types = vis_dat.obsm[obsm_key].columns
-  
-  # --- 2. Initialize DataFrames ---
-  pearson_df = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
-  jaccard_df = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
-  moran_df   = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
-  moran_pval_df = pd.DataFrame(index=cell_types, columns=gene_groups, dtype=float)
-
-  # --- 3. Iterate and Calculate ---
-  for ct in cell_types:
-    # Prepare Cell Type Vector (Y)
-    y = vis_dat.obsm[obsm_key][ct].values
-    
-    # Pre-calculate Spatial Lag of Y (W * y_std)
-    # Standardizing simplifies the Bivariate Moran's I formula
-    if np.std(y) > 1e-12:
-      y_std = (y - np.mean(y)) / np.std(y)
-      y_lag = W_norm.dot(y_std)
-    else:
-      y_std, y_lag = None, None
-
-    for group in gene_groups:
-      if group not in vis_dat.obs.columns:
-        continue
-      
-      # Prepare Gene Group Vector (X)
-      x = vis_dat.obs[group].values
-      
-      # --- Metric 1: Pearson Correlation ---
-      if np.std(y) > 1e-12 and np.std(x) > 1e-12:
-        pearson_df.loc[ct, group] = pearsonr(y, x)[0]
-      else:
-        pearson_df.loc[ct, group] = 0.0
-      
-      # --- Metric 2: Jaccard Index ---
-      q_y = np.quantile(y, quantile_threshold)
-      q_x = np.quantile(x, quantile_threshold)
-      y_mask = y > q_y
-      x_mask = x > q_x
-      jaccard_df.loc[ct, group] = jaccard_score(y_mask, x_mask)
-
-      # --- Metric 3: Bivariate Moran's I & P-Value ---
-      # Formula: I = (Z_x * W * Z_y) / N
-      if y_lag is not None and np.std(x) > 1e-12:
-        x_std = (x - np.mean(x)) / np.std(x)
-        N = len(x)
-        
-        # Observed I
-        obs_I = (x_std @ y_lag) / N
-        moran_df.loc[ct, group] = obs_I
-        
-        # Permutation Test for P-value
-        # Shuffle X (Gene Score) while keeping Y (Cell Type Spatial Lag) fixed
-        sim_Is = np.zeros(n_perms)
-        x_perm = x_std.copy()
-        
-        for p in range(n_perms):
-          np.random.shuffle(x_perm)
-          sim_Is[p] = (x_perm @ y_lag) / N
-        
-        # Calculate P-value (Pseudo-significance)
-        # (Number of simulations >= observed) + 1 / (Total simulations + 1)
-        p_val = (np.sum(sim_Is >= obs_I) + 1) / (n_perms + 1)
-        
-        moran_pval_df.loc[ct, group] = p_val
-      else:
-        moran_df.loc[ct, group] = np.nan
-        moran_pval_df.loc[ct, group] = np.nan
-
-  # --- 4. Apply FDR Correction (Benjamini-Hochberg) ---
-  # Flatten, correct, and reshape
-  if apply_fdr_correction:
-    p_values_flat = moran_pval_df.values.flatten()
-    mask = ~np.isnan(p_values_flat)
-  
-    if np.any(mask):
-      _, fdr_flat, _, _ = multipletests(p_values_flat[mask], method='fdr_bh')
-      p_values_flat[mask] = fdr_flat
-  
-    moran_pval_df[:] = p_values_flat.reshape(moran_pval_df.shape)
-
-  return pearson_df, jaccard_df, moran_df, moran_pval_df
-
-def plot_correlation_heatmap(data_df, title, metric_name, pval_df=None, sig_threshold=0.05):
-  """
-  Plots a hierarchical clustering heatmap with masking for non-significant values.
-  """
-  # 1. Prepare Data and Mask
-  # Fill NaNs with 0 for robust clustering (assumes 0 = no correlation/overlap)
-  plot_data = data_df.fillna(0).astype(float)
-  
-  mask = None
-  if pval_df is not None:
-    # Ensure p-values align with data dimensions
-    pval_aligned = pval_df.reindex(index=plot_data.index, columns=plot_data.columns)
-    
-    # Create Mask: True where P-value >= threshold OR P-value is missing
-    # Masked values will appear white/transparent in the heatmap
-    mask = (pval_aligned >= sig_threshold) | pval_aligned.isna()
-    
-    # Also mask where the original data itself was NaN (if any)
-    mask = mask | data_df.isna()
-
-  # Determine colormap center based on metric type
-  is_diverging = any(x in metric_name for x in ["Correlation", "Moran"])
-  cmap = "vlag" if is_diverging else "magma"
-  center = 0 if is_diverging else None
-
-  # 2. Plot Clustermap
-  g = sns.clustermap(
-    plot_data,
-    mask=mask,               # Apply the significance mask
-    cmap=cmap,
-    center=center,
-    figsize=(10, 8),
-    dendrogram_ratio=(.1, .2),
-    cbar_pos=(0.02, 0.32, 0.03, 0.2),
-    row_cluster=True,
-    col_cluster=False
-  )
-  
-  # 3. Aesthetics
-  g.ax_heatmap.set_title(f"{title}\n{metric_name}", pad=20)
-  
-  # Rotate x-axis labels for readability
-  g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=45, ha='right')
-  
-  # Add subtitle about significance if masking was applied
-  if pval_df is not None:
-     g.ax_heatmap.set_xlabel(f"Note: Non-significant values (FDR ≥ {sig_threshold}) are masked.", fontsize=9, labelpad=10)
-
-  plt.show()
-
-```
+Here, we calculate correlation with the gene group score from previous chapter, and also look at more finetuned gene-specific correlation. For basic approach, we use score_genes function from scanpy to summarise groups of genes expression into more digestible format.
 
 Here we show an example of a early secretory slide, id "152807", with various statistical tests
 
@@ -405,81 +218,20 @@ plot_correlation_heatmap(
 
 ```
 
-```{python}
-
-def aggregate_correlations(slide_ids, adata_collection, gene_groups, obsm_key, quantile_threshold=0.75):
-  """
-  Calculates metrics for multiple slides and returns the average scores.
-  P-values are combined using Fisher's method.
-  """
-  # Storage for accumulating results
-  accumulators = {
-    'pearson': [],
-    'jaccard': [],
-    'moran': [],
-    'moran_pval': []
-  }
-
-  print(f"Processing {len(slide_ids)} slides: {slide_ids}")
-
-  for slide in slide_ids:
-    # 1. Load and Prep Slide
-    # Handle the specific tuple key format of your adata_collection
-    try:
-      vis_dat = adata_collection[(slide, "ref")].copy()
-    except KeyError:
-      print(f"Skipping {slide}: Not found in collection.")
-      continue
-      
-    # 2. Calculate Scores for this specific slide
-    # (Ensure your calculate_scores function handles the raw data correctly)
-    vis_dat = calculate_scores(vis_dat, gene_groups)
-
-    # 3. Run Correlations
-    p, j, m, m_p = calculate_correlations(
-      vis_dat, 
-      list(gene_groups.keys()), 
-      obsm_key, 
-      quantile_threshold
-    )
-    
-    accumulators['pearson'].append(p)
-    accumulators['jaccard'].append(j)
-    accumulators['moran'].append(m)
-    accumulators['moran_pval'].append(m_p)
-
-  # 4. Aggregate Results
-  # Average the coefficients (Pearson, Jaccard, Moran's I)
-  avg_pearson = pd.concat(accumulators['pearson']).groupby(level=0).mean()
-  avg_jaccard = pd.concat(accumulators['jaccard']).groupby(level=0).mean()
-  avg_moran   = pd.concat(accumulators['moran']).groupby(level=0).mean()
-
-  # Combine P-values using Fisher's method
-  # We need a custom apply because combine_pvalues expects a list of values
-  def fisher_agg(series):
-    # Filter NaNs
-    valid_p = series.dropna()
-    if len(valid_p) == 0: return np.nan
-    # Fisher's method returns (statistic, pvalue)
-    return combine_pvalues(valid_p, method='fisher')[1]
-
-  # Stack all p-value DFs and apply Fisher's method per cell (cell_type x gene_group)
-  # This aligns by index (cell_type) and columns (gene_group)
-  combined_pval = pd.concat(accumulators['moran_pval']).groupby(level=0).agg(fisher_agg)
-
-  return avg_pearson, avg_jaccard, avg_moran, combined_pval
-
-# 1. Set values
-OBSM_KEY = "tangram_ct_pred"
-
-```
 
 ::: {.panel-tabset}
 
 ### Proliferative
 
 ```{python}
-slide_ids = ["152806", "152810"]
+
+# 1. Set values
+OBSM_KEY = "tangram_ct_pred"
+
+```
+
+```{python}
+slide_ids = phases["Proliferative"]
 # Run Aggregation
 agg_pearson, agg_jaccard, agg_moran, agg_pval = aggregate_correlations(
   slide_ids,
@@ -502,7 +254,7 @@ plot_correlation_heatmap(
 ### Early-secretory
 
 ```{python}
-slide_ids = ["152807", "152811"]
+slide_ids = phases["Early-Secretory"]
 
 # Run Aggregation
 agg_pearson, agg_jaccard, agg_moran, agg_pval = aggregate_correlations(
@@ -526,10 +278,7 @@ plot_correlation_heatmap(
 ### Mid-secretory
 
 ```{python}
-slide_ids = [
-  "CTR1_processed_data", "CTR2_processed_data", 
-  "CTR3_processed_data", "CTR4_processed_data"
-]
+slide_ids = phases["Mid-Secretory"]
 
 # Run Aggregation
 agg_pearson, agg_jaccard, agg_moran, agg_pval = aggregate_correlations(
@@ -562,7 +311,8 @@ Lets make a line plot over cycle phases, take only differentially significant co
 ## Load the single cell reference data lineage information to group cell types
 sc_dat = an.read_h5ad(snapshot_an_loc, backed="r")
 sc_obs = sc_dat.obs.copy()
-sc_dat.obs.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
+del sc_dat
+sc_obs.replace({"lineage": {"Mesenchymal": "Stromal"}}, inplace=True)
 general_lineages = sc_obs[["celltype", "lineage"]].drop_duplicates().set_index("celltype")
 
 # Organize results in order
@@ -571,172 +321,6 @@ phase_results = {
     'Early-Secretory': results_early, 
     'Mid-Secretory': results_mid
 }
-```
-
-```{python}
-import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
-import pandas as pd
-import numpy as np
-
-def plot_nested_dot_plot(phase_results, cell_type_order=None, gene_group_order=None, sig_threshold=0.05):
-  """
-  Plots a nested dot plot with dynamic color scaling and strict axis ordering.
-  
-  Parameters:
-  -----------
-  phase_results : dict
-      Dictionary { 'PhaseName': (moran_df, pval_df) }
-  cell_type_order : list (Optional)
-      List of cell types to sort the Y-axis.
-  gene_group_order : list (Optional)
-      List of gene groups to sort the X-axis.
-  """
-  
-  # --- 1. Data Preparation ---
-  long_data = []
-  
-  phase_styles = {
-      'Proliferative': {'offset': -0.25, 'marker': 'o', 'label': 'Prolif (•)'},
-      'Early-Secretory':     {'offset':  0.00, 'marker': 's', 'label': 'Early (■)'},
-      'Mid-Secretory':       {'offset':  0.25, 'marker': 'D', 'label': 'Mid (♦)'}
-  }
-  
-  # Consolidate data
-  for phase_name, (m_df, p_df) in phase_results.items():
-    style = next((v for k, v in phase_styles.items() if k in phase_name), None)
-    if style is None: continue
-    
-    # Process Moran's I
-    m_melt = m_df.reset_index().melt(id_vars='index', var_name='gene_group', value_name='moran')
-    m_melt.rename(columns={'index': 'cell_type'}, inplace=True)
-    
-    # Process P-values
-    p_melt = p_df.reset_index().melt(id_vars='index', var_name='gene_group', value_name='pval')
-    p_melt.rename(columns={'index': 'cell_type'}, inplace=True)
-    
-    merged = pd.merge(m_melt, p_melt, on=['cell_type', 'gene_group'])
-    merged['phase'] = phase_name
-    merged['x_offset'] = style['offset']
-    merged['marker'] = style['marker']
-    
-    long_data.append(merged)
-
-  df_all = pd.concat(long_data, ignore_index=True)
-
-  # --- 2. Sorting and Ordering (X and Y axes) ---
-  
-  # A. Cell Type Order (Y-axis)
-  if cell_type_order is not None:
-    df_all = df_all[df_all['cell_type'].isin(cell_type_order)].copy()
-    df_all['cell_type'] = pd.Categorical(
-      df_all['cell_type'], categories=cell_type_order, ordered=True
-    )
-  else:
-    # Default to alphabetical if not provided
-    df_all = df_all.sort_values('cell_type')
-
-  # B. Gene Group Order (X-axis)
-  if gene_group_order is not None:
-    df_all = df_all[df_all['gene_group'].isin(gene_group_order)].copy()
-    df_all['gene_group'] = pd.Categorical(
-      df_all['gene_group'], categories=gene_group_order, ordered=True
-    )
-  # If no order provided, we leave it as is (pandas concat order) or alphabetical
-  
-  # Apply the sort
-  df_all = df_all.sort_values(['cell_type', 'gene_group'])
-  
-  if df_all.empty:
-      print("Warning: No data found after filtering.")
-      return
-
-  # --- 3. Calculate Global Limits ---
-  # data_min = df_all['moran'].min()
-  data_min = 0
-  data_max = df_all['moran'].max()
-  vmin, vmax = data_min, data_max
-
-  # Mappings (Categoricals ensure the order is preserved in .unique())
-  unique_cells = df_all['cell_type'].unique()
-  unique_genes = df_all['gene_group'].unique()
-  
-  cell_map = {ct: i for i, ct in enumerate(unique_cells)}
-  gene_map = {g: i for i, g in enumerate(unique_genes)}
-  
-  df_all['y_coord'] = df_all['cell_type'].map(cell_map)
-  df_all['x_coord'] = df_all['gene_group'].map(gene_map) + df_all['x_offset']
-  
-  # Size & Alpha
-  df_all['size'] = np.where(df_all['pval'] < sig_threshold, 120, 10)
-  df_all['alpha'] = np.where(df_all['pval'] < sig_threshold, 1.0, 0.3)
-
-  # --- 4. Plotting ---
-  fig, ax = plt.subplots(figsize=(len(unique_genes)*1.2 + 3, len(unique_cells)*0.5 + 1))
-  
-  sc = None
-  for phase_key, style in phase_styles.items():
-    subset = df_all[df_all['phase'].str.contains(phase_key, regex=False)]
-    if subset.empty: continue
-    
-    sc = ax.scatter(
-      x=subset['x_coord'],
-      y=subset['y_coord'],
-      c=subset['moran'],
-      s=subset['size'],
-      marker=style['marker'],
-      cmap='vlag',
-      vmin=vmin, vmax=vmax,
-      edgecolor='k',
-      linewidth=0.5,
-      alpha=subset['alpha'].values
-    )
-
-  # --- 5. Formatting ---
-  ax.set_yticks(range(len(unique_cells)))
-  ax.set_yticklabels(unique_cells, fontsize=10)
-  ax.set_xticks(range(len(unique_genes)))
-  ax.set_xticklabels(unique_genes, rotation=45, ha='right', fontsize=10)
-  
-  # Grid
-  ax.set_axisbelow(True)
-  for y in np.arange(0.5, len(unique_cells) - 0.5):
-    ax.axhline(y, color='lightgrey', linestyle='-', linewidth=0.5)
-  for x in np.arange(0.5, len(unique_genes) - 0.5):
-    ax.axvline(x, color='lightgrey', linestyle='-', linewidth=0.5)
-
-  ax.invert_yaxis()
-  ax.set_xlabel("Gene Groups", fontsize=11, labelpad=10)
-  ax.set_title("Spatial Correlation by Cycle Phase", fontsize=13, pad=15)
-
-  # --- 6. Legends ---
-  cbar = plt.colorbar(sc, ax=ax, fraction=0.02, pad=0.02)
-  cbar.set_label("Bivariate Moran's I", fontsize=10)
-  
-  legend_handles = []
-  legend_handles.append(mlines.Line2D([], [], color='none', label=r'$\bf{Cycle\ Phase}$'))
-  
-  present_phases = df_all['phase'].unique()
-  for name, style in phase_styles.items():
-    if any(name in p for p in present_phases):
-      legend_handles.append(mlines.Line2D([], [], color='k', marker=style['marker'], 
-                          linestyle='None', markersize=8, label=style['label']))
-  
-  legend_handles.append(mlines.Line2D([], [], color='none', label=' '))
-  legend_handles.append(mlines.Line2D([], [], color='none', label=r'$\bf{Significance}$'))
-  legend_handles.append(mlines.Line2D([], [], color='grey', marker='o', linestyle='None', 
-                      markersize=11, label=f'P < {sig_threshold}'))
-  legend_handles.append(mlines.Line2D([], [], color='grey', marker='o', linestyle='None', 
-                      markersize=4, alpha=0.5, label='Not Sig.'))
-
-  ax.legend(handles=legend_handles, 
-        bbox_to_anchor=(1.20, 1.0), 
-        loc='upper left', 
-        frameon=False)
-
-  plt.tight_layout()
-  plt.show()
-
 ```
 
 Lets divide this summarized view into different cell lineages.
@@ -775,3 +359,26 @@ plot_nested_dot_plot(phase_results, cell_type_order=immune_cell_types, sig_thres
 Maybe not include this in the final plot, the frame has wrong size here. Additinoally, these cell types are not the main focus here, and Visium experiment wouldnt cover them well anyway.
 
 :::
+
+## Using an unified scoring for all the genes
+
+Here we use the `scanpy.tl.score_genes` function to summarise all the EV-related genes together, and focus on general patterns throughout the cycle phases.
+
+```{python}
+
+unified_genes = {"EV-combined": [item for sublist in all_genes.values() for item in sublist]}
+cycle_all_ev = {}
+for phase in phases.keys():
+  _, _, agg_moran, agg_pval = aggregate_correlations(phases[phase], adata_collection, unified_genes, OBSM_KEY)
+  phase_stats = (agg_moran, agg_pval)
+  cycle_all_ev[phase] = phase_stats
+
+plot_ev_phase_heatmap(
+    cycle_all_ev, 
+    gene_col="EV-combined", 
+#     cell_type_list=general_lineages.index.tolist(), 
+    lineage_info=general_lineages, 
+    fdr_threshold=0.05
+)
+
+```
