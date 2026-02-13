@@ -171,7 +171,19 @@ all_results = (
 )
 
 # Add cycle phase information
-all_results['cyclephase'] = all_results['slide_id'].apply(lambda x: 'Secretory' if x in ["152807", "152811"] else 'Proliferative')
+all_results = (
+  all_results
+  .assign(
+    cyclephase=lambda df: np.select(
+      condlist=[
+        df["slide_id"].str.startswith("CTR"),
+        df["slide_id"].isin(["152807", "152811"])
+      ],
+      choicelist=["Mid-secretory", "Early-secretory"],
+      default="Proliferative"
+    )
+  )
+)
 
 # Exclude cell types in the "Endothelial" lineage
 endothelial_celltypes = general_cells[general_cells['lineage'] == 'Endothelial'].index

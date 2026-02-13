@@ -17,50 +17,66 @@ data_folder <- Sys.getenv("DATA_FOLDER")
 input_file <- file.path(data_folder, "sc_deconv_snapshot.h5ad")
 output_path <- file.path(data_folder, "dwls_results")
 
-# Ensure output directory exists
 if (!dir.exists(output_path)) {
   dir.create(output_path, recursive = TRUE)
 }
+output_dir <- normalizePath(output_path) # Convert to full absolute path
 
 # 2. Load and Convert Data
-# Reading h5ad directly into SingleCellExperiment
 message("Reading h5ad file: ", input_file)
 sce <- readH5AD(input_file, use_hdf5 = TRUE)
 
-# Convert to Seurat object
-# Assuming 'X' in h5ad contains raw counts (based on preproc_sc.qmd)
 message("Converting to Seurat object...")
 seu <- as.Seurat(sce, counts = "X", data = NULL)
 
 # 3. Preprocessing
-# DWLS requires normalized data for DE analysis.
-# If 'X' was raw counts, we must normalize.
+# DWLS with MAST works best on Log-Normalized data
 seu <- NormalizeData(seu, normalization.method = "LogNormalize", scale.factor = 10000)
 
-# Set the identity class to the cell type column
-# Ensure 'celltype' exists in metadata (imported from .obs)
+# Ensure celltype annotation exists
 if (!"celltype" %in% colnames(seu@meta.data)) {
   stop("Column 'celltype' not found in metadata.")
 }
 Idents(seu) <- "celltype"
 
-# 4. Build Signature Matrix
-message("Building DWLS signature matrix...")
+# 4. Prepare Data for DWLS Core Function
+# We extract the normalized matrix and ID vector manually to bypass the version conflict
+message("Extracting data matrix and identities...")
 
-# Arguments:
-# scdata: The Seurat object
-# id: Vector of cell type labels corresponding to cells (required by DWLS)
-# path: Output directory
-# diff.cutoff: LogFC cutoff (default 0.5)
-# pval.cutoff: P-value cutoff (default 0.01)
-# f: Max number of genes per group (default 200)
+# Extract sparse matrix (using 'data' slot for normalized counts)
+# Note: For very large datasets, this conversion to a regular matrix might be memory intensive.
+# DWLS/MAST often requires a dense matrix or specific sparse handling. 
+# We convert to a standard matrix to ensure compatibility with older DWLS code.
+data_matrix <- as.matrix(GetAssayData(seu, layer = "data"))
 
-buildSignatureMatrixUsingSeurat(
-  scdata = seu,
-  id = as.character(Idents(seu)),
-  path = output_path,
+# Extract identities
+cell_ids <- as.character(Idents(seu))
+
+# 5. Build Signature Matrix
+message("Building DWLS signature matrix using MAST...")
+message("Intermediate results will be saved to: ", output_dir)
+
+# Capture the returned matrix object
+sig_mat <- buildSignatureMatrixMAST(
+  scdata = data_matrix,
+  id = cell_ids,
+  path = output_dir,   # DWLS uses this for DE stats files
   diff.cutoff = 0.5,
-  pval.cutoff = 0.01
+  pval.cutoff = 0.01,
+  f = 250              # make it comparable in gene size to BulkTrajBlend
 )
 
-message("Signature matrix generation complete. Results saved to: ", output_path)
+# 6. Save Final Output
+# Explicitly write the result to a file
+final_output_file <- file.path(output_dir, "signature_matrix.txt")
+message("Writing final signature matrix to: ", final_output_file)
+
+write.table(
+  sig_mat, 
+  file = final_output_file, 
+  sep = "\t", 
+  quote = FALSE, 
+  col.names = NA
+)
+
+message("Done.")

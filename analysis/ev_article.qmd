@@ -268,8 +268,10 @@ def create_lineage_aware_colors(general_cells_df):
 
 phase_colors = {
   "Proliferative": "#006d2c", "P": "#006d2c", "EP": "#6ed5ff", "LP": "#006d2c",
-  "Pre-receptive": "#00BA38", "ES": "#00BA38", "Early-receptive": "#00BFC4",
-  "Receptive": "#619CFF", "MS": "#619CFF", "Secretory": "#619CFF",
+  "Pre-receptive": "#00BA38", "ES": "#00BA38", 
+  "Early-receptive": "#00BFC4", "Early-secretory": "#00BFC4",
+  "Receptive": "#619CFF", "MS": "#619CFF", "Secretory": "#619CFF", 
+  "Mid-secretory": "#619CFF",
   "Late-receptive": "#F58633", "Post-receptive": "#D11141", "LS": "#D11141",
   "Menstrual": "#d11141",
   "HRT+3": "#00BA38", "HRT+4": "#00BFC4", "HRT+5": "#619CFF", "HRT+6": "#F58633", "HRT+7": "#D11141",
@@ -853,7 +855,7 @@ fig2.save(fig_loc / "fig_2.svg", scale_factor=5)
 # fig2.save(fig_loc / "fig_2.png", ppi=300) # save it in png too bc of font issues
 
 fig2.show()
-  ```
+```
 
 ## FIG 3: Comparison of Biopsy and EV Sampling Methods
 
@@ -1534,6 +1536,8 @@ boxplot = alt.Chart(filtered_df).mark_boxplot(extent='min-max').encode(
   y=alt.Y('value:Q', title='Value'),  # Statistic value on Y-axis
   xOffset=alt.XOffset('comparison:N', title=None),  # Rotate x-axis labels
   color=alt.Color('comparison:N', legend=alt.Legend(title='Comparison'))  # Color by comparison
+).properties(
+  height=180  # Adjust this value to reduce subplot height
 )
 
 # 2. Apply faceting
@@ -1631,6 +1635,8 @@ And now for the Moran's I compared to the Morans' simulated FDR (based on 1000 i
 ```{python}
 # Filter for Moran's I metrics
 moran_df = stats_df[stats_df['metric'].isin(['Moran I', 'Moran I FDR'])].copy()
+# rename all CTR1_processed_data to CTR1 for better readability
+moran_df['slide_id'] = moran_df['slide_id'].str.replace(r"processed_data", "", regex=True)
 
 # Pivot the table to get metrics as columns
 moran_pivot = (
@@ -1700,12 +1706,12 @@ g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=45, ha='ri
 # Create handles for Cycle Phase legend
 cycle_handles = [mpatches.Patch(color=cyclephase_color_map[name], label=name) for name in unique_cyclephases]
 # Add the first legend - Position relative to the FIGURE edge
-legend1 = g.fig.legend(handles=cycle_handles, title='Cycle Phase', bbox_to_anchor=(0.80, 1), loc='upper left', borderaxespad=0., frameon=False, alignment='left')
+legend1 = g.fig.legend(handles=cycle_handles, title='Cycle Phase', bbox_to_anchor=(0.80, 1), loc='upper left', borderaxespad=0., frameon=False, alignment='left', fontsize=8)
 
 # Create handles for Projection dataset legend
 comp_handles = [mpatches.Patch(color=comparison_color_map[name], label=name) for name in unique_comparisons]
 # Add the second legend - Position below the first one
-legend2 = g.fig.legend(handles=comp_handles, title='Generated dataset', bbox_to_anchor=(0.80, 0.93), loc='upper left', borderaxespad=0., frameon=False, alignment='left')
+legend2 = g.fig.legend(handles=comp_handles, title='Generated dataset', bbox_to_anchor=(0.80, 0.92), loc='upper left', borderaxespad=0., frameon=False, alignment='left', fontsize=8)
 
 plt.suptitle("Clustered Heatmap of Significant Moran's I (FDR < 0.05)", y=1.02) # Add title
 plt.savefig(fig_loc / "fig_5c.svg", bbox_inches='tight', dpi=300) # Save the figure
