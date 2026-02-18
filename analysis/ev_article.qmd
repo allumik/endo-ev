@@ -1716,6 +1716,11 @@ legend2 = g.fig.legend(handles=comp_handles, title='Generated dataset', bbox_to_
 plt.suptitle("Clustered Heatmap of Significant Moran's I (FDR < 0.05)", y=1.02) # Add title
 plt.savefig(fig_loc / "fig_5c.svg", bbox_inches='tight', dpi=300) # Save the figure
 plt.show() # Display the plot
+
+
+# print(heatmap_data.max().max(), heatmap_data.min().min()) # Check the range of Moran's I values for better color scaling if needed
+# print(heatmap_data.query("celltype in ['uSMCs', 'eStromal']").filter(regex="_scRNA-seq$").T.mean()) # Check the range of Moran's I values for a specific cell type if needed
+
 ```
 
 :::

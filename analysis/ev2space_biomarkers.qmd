@@ -321,6 +321,14 @@ phase_results = {
     'Early-Secretory': results_early, 
     'Mid-Secretory': results_mid
 }
+
+# print(
+  # np.max([ np.max(results_prolif[0]), np.max(results_early[0]), np.max(results_mid[0]) ])
+# )
+
+# print(
+  # np.min([ np.min(results_prolif[0]), np.min(results_early[0]), np.min(results_mid[0]) ])
+# )
 ```
 
 Lets divide this summarized view into different cell lineages.
@@ -400,5 +408,13 @@ plot_ev_phase_heatmap(
     lineage_info=general_lineages, 
     fdr_threshold=0.05
 )
+
+averaged_results = (
+  pd.concat([cycle_all_ev["Proliferative"][0], cycle_all_ev["Early-Secretory"][0], cycle_all_ev["Mid-Secretory"][0]])
+  .query("index == 'eStromal'") # uSMCs eStromal
+  .select_dtypes("number")
+  .mean()
+)
+print(averaged_results)
 
 ```

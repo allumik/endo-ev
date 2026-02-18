@@ -15,7 +15,7 @@ data_folder <- Sys.getenv("DATA_FOLDER")
 
 # Define paths
 input_file <- file.path(data_folder, "sc_deconv_snapshot.h5ad")
-output_path <- file.path(data_folder, "dwls_results")
+output_path <- file.path("./dwls_results")
 
 if (!dir.exists(output_path)) {
   dir.create(output_path, recursive = TRUE)
@@ -62,8 +62,7 @@ sig_mat <- buildSignatureMatrixMAST(
   id = cell_ids,
   path = output_dir,   # DWLS uses this for DE stats files
   diff.cutoff = 0.5,
-  pval.cutoff = 0.01,
-  f = 250              # make it comparable in gene size to BulkTrajBlend
+  pval.cutoff = 0.01
 )
 
 # 6. Save Final Output
