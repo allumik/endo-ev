@@ -29,12 +29,16 @@ Best efforts were made to try to organise things in the following way:
 
 ## Setup for Reproducing the Analysis
 
-1. Using a `conda`-like environment manager, recreate the analysis environment with:
+1. We are using `pixi` for this project, and there are following environments defined:
 
 ```
-conda env create -f env.yml -y
-conda env create -f ev-proc.yml -y
-conda env create -f renv.yml -y
+# install as necessary
+pixi install -e proc # train the models and perform st mapping
+pixi install -e analysis # main analysis in Python
+
+# some extras
+pixi install -e pydeconv # for deconvolution tasks
+pixi install -e r-analysis # some R tools for DE and DWLS, not used
 ```
 
 2. Then, copy the `.env_template` to `.env` and populate the environment variables to suit your situation. 
@@ -43,7 +47,7 @@ conda env create -f renv.yml -y
 
 4. Next, start running the preprocessing scripts found in `./preproc_scripts/` to quantify reads.
 
-5. Follow the `./run_wf.sh` script.
+5. Follow the `./run_wf.sh` script to recreate the results.
 
 
 Alternatively, you can use the scripts in the `./preproc_scripts/` folder to run the nf-core/rnaseq pipeline on the raw data.
